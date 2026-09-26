@@ -5,14 +5,20 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 
 # subagent-jev — JEV 合规规则配置流程
 
-为 pi-subagent-jev 之派单审核配置规则：查模型 → 读 prompt → 定规则 → 测规则 → 写配置。全程恪守红线三条：apiKey 之值不入任何档/日志/错误文本；POST 不自动重试；任何错误 fail-open。
+为 pi-subagent-jev 之派单审核配置规则：查环境 → 查模型 → 试连通 → 读 prompt → 定规则 → 测规则 → 写配置。全程恪守红线三条：apiKey 之值不入任何档/日志/错误文本；POST 不自动重试；任何错误 fail-open。
+
+## 前置步 · 查环境
+1. 遣 scout 查 pi-subagents 之有无：`pi list` 所列包，或 `~/.pi/agent/settings.json` 之 `packages` 项（本机目录 `~/.pi/agent/npm/node_modules/pi-subagents/` 存在亦是据）。
+2. 未装 → 问用户准后遣 worker 行 `pi install pi-subagents`；装毕嘱用户于 pi 内 `/reload`，再续下步。
+3. 已装 → 径续。
 
 ## 第〇步 · 查模型设置
 1. 遣 scout 查 `~/.config/jev-comp/env` 之**键名**（唯查 `JEV_AI_API_KEY`/`JEV_AI_BASE_URL`/`JEV_AI_MODEL` 三键之有无，**绝不读值**）及进程 env 同名变量之有无。
 2. 缺 `JEV_AI_BASE_URL` 或 `JEV_AI_MODEL` → 询问用户后遣 delegate 以 `KEY=VALUE` 行写入该 env 档（档权限须 600）。
 3. 缺 `JEV_AI_API_KEY` → **嘱用户亲笔自填**，agent 全程不经手其值。
-4. 三键俱齐 → 报现状，问用户：「为哪几个 subagent 定规则？」
-5. 可以 `jev_models` 列端点已连模型，供用户拣选 model id。
+4. 三键俱齐 → 以 `jev_models` 试连通：列得模型即端点与 key 俱通；报错则先排查配置（端点/key/网络），勿续。
+5. 连通无碍 → 报现状，问用户：「为哪几个 subagent 定规则？」
+6. 可以 `jev_models` 列端点已连模型，供用户拣选 model id。
 
 ## 第一步 · 读 prompt
 遣 scout 取 `~/.pi/agent/npm/node_modules/pi-subagents/agents/<agent>.md`，析其：职能、工具白名单（有无 bash）、行为契约（如「方向不自决」）、禁忌。注意别名（worker 有别名 developer/coder/implementer/develop）——配置以派单之名为键，约定只用正名。
