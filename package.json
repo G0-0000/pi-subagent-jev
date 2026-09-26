@@ -4,6 +4,9 @@
   "description": "JEV System One compliance gate for pi subagent dispatches",
   "keywords": ["pi-package"],
   "license": "MIT",
+  "scripts": {
+    "test": "node --test jev/*.test.ts"
+  },
   "pi": {
     "extensions": ["./extensions/jev.ts", "./extensions/jev-compliance.ts"]
   },

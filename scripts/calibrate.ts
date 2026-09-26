@@ -2,7 +2,7 @@
 // 每 case 一次请求打包四问（noul，0–1 概率）；顺序执行；错误不重试。
 // 跑法：set -a; . ~/.config/jev/env; set +a; node scripts/calibrate.ts
 import { appendFileSync, mkdirSync } from "node:fs";
-import { ask, JevError, type SystemOneResult } from "../client.ts";
+import { ask, JevError, type SystemOneResult } from "../jev/client.ts";
 
 const STATE_TEMPLATE =
   'The following is a task dispatched to a sub-agent named "delegate", a file-editing agent without shell access. Task text follows.';
@@ -90,8 +90,8 @@ function judgeR(p: number, passWhenHigh: boolean): Judge {
   return passWhenHigh ? "违" : "合";
 }
 
-const outPath = new URL("../calibration-20260925.jsonl", import.meta.url).pathname;
-mkdirSync(new URL("..", import.meta.url).pathname, { recursive: true });
+const outPath = new URL("./calibration-20260925.jsonl", import.meta.url).pathname;
+mkdirSync(new URL(".", import.meta.url).pathname, { recursive: true });
 const lines: string[] = [];
 
 const rows: string[] = [];
