@@ -1,0 +1,11 @@
+{
+  "delegate": {
+    "agentDesc": "a file-editing agent without shell access",
+    "rules": [
+      { "id": "R1", "blockWhen": "below", "threshold": 0.7, "message": "任务未给出具体文件路径" },
+      { "id": "R2", "blockWhen": "below", "threshold": 0.7, "message": "任务无确定内容" },
+      { "id": "R3", "blockWhen": "above", "threshold": 0.8, "message": "任务要求执行 shell 命令/构建测试，delegate 无 bash 权限" },
+      { "id": "R4", "blockWhen": "above", "threshold": 0.8, "message": "任务要求 agent 自行探索查资料" }
+    ]
+  }
+}

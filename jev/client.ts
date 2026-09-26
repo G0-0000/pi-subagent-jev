@@ -1,0 +1,334 @@
+// JEV API client（9router 本地端点 http://192.168.3.119:8081，LAN 直连免代理）。零 npm 依赖，curl 传输。
+// 任何输出 / 错误消息不得包含 API key。
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import pathMod from "node:path";
+
+export type NoulQuestion = {
+  type: "noul";
+  instructions: string;
+  criteria?: { true?: string; false?: string };
+};
+export type ChoiceQuestion = {
+  type: "choice";
+  instructions: string;
+  criteria?: Record<string, string>;
+  options: Record<string, string | null>;
+};
+export type ScoreQuestion = {
+  type: "score";
+  instructions: string;
+  criteria?: Record<string, string>;
+  levels: Record<string, string | null>;
+};
+export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
+
+export type Answer =
+  | { noul: number }
+  | { choice: { value: string; probabilities: Record<string, number>; confidence: number } }
+  | { score: { value: number; probabilities: Record<string, number>; confidence: number } };
+
+export type Usage = { input_tokens?: number; output_tokens?: number; [k: string]: unknown };
+
+export type SystemOneResult = {
+  model: string;
+  answers: Record<string, Answer>;
+  usage: Usage;
+};
+
+export type JevErrorKind =
+  | "not_configured"
+  | "unauthorized"
+  | "payment_required"
+  | "invalid_request"
+  | "rate_limited"
+  | "upstream"
+  | "timeout"
+  | "network"
+  | "unexpected";
+
+export class JevError extends Error {
+  kind: JevErrorKind;
+  status?: number;
+  bodySummary?: string;
+  retryAfterMs?: number;
+  stderr?: string;
+
+  constructor(
+    kind: JevErrorKind,
+    message: string,
+    opts: { status?: number; bodySummary?: string; retryAfterMs?: number; stderr?: string } = {}
+  ) {
+    super(message);
+    this.name = "JevError";
+    this.kind = kind;
+    this.status = opts.status;
+    this.bodySummary = opts.bodySummary;
+    this.retryAfterMs = opts.retryAfterMs;
+    this.stderr = opts.stderr;
+  }
+}
+
+export type JevConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+  envFile?: string;
+  proxy?: string;
+  timeoutMs?: number;
+};
+
+type ResolvedConfig = {
+  baseUrl: string;
+  apiKey: string;
+  proxy: string;
+  timeoutMs: number;
+};
+
+function resolveConfig(cfg: JevConfig = {}): ResolvedConfig {
+  // key 解析序：显式参数 > 进程 env JEV_AI_API_KEY > env 档；全落空 → not_configured。
+  // 红线：key 之值绝不得进入任何错误消息 / 日志 / 返回文本。
+  let apiKey = "";
+  if (cfg.apiKey !== undefined) {
+    apiKey = cfg.apiKey;
+  } else if (process.env.JEV_AI_API_KEY) {
+    apiKey = process.env.JEV_AI_API_KEY;
+  } else {
+    const envFilePath =
+      cfg.envFile ?? process.env.JEV_AI_ENV_FILE ?? pathMod.join(os.homedir(), ".config", "jev", "env");
+    apiKey = readEnvFile(envFilePath).JEV_AI_API_KEY || "";
+  }
+  if (!apiKey) {
+    throw new JevError(
+      "not_configured",
+      "JEV API key 未配置（解析序：显式参数 apiKey → 环境变量 JEV_AI_API_KEY → env 档 JEV_AI_ENV_FILE/~/.config/jev/env，均未得）"
+    );
+  }
+  const baseUrl = (
+    cfg.baseUrl !== undefined
+      ? cfg.baseUrl
+      : process.env.JEV_AI_BASE_URL || "http://192.168.3.119:8081"
+  ).replace(/\/+$/, "");
+  const proxy =
+    cfg.proxy !== undefined ? cfg.proxy : process.env.JEV_AI_PROXY || "";
+  const timeoutMs = cfg.timeoutMs !== undefined ? cfg.timeoutMs : 30_000;
+  return { baseUrl, apiKey, proxy, timeoutMs };
+}
+
+/** 解析 env 档内容：识 `export KEY=VALUE` 与 `KEY=VALUE`，去首尾空白与成对引号。 */
+function parseEnvFile(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const rawLine of raw.split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice("export ".length).trim();
+    const idx = line.indexOf("=");
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (key) out[key] = value;
+  }
+  return out;
+}
+
+// 进程内缓存：同一路径一次 parse 足用。
+const envFileCache = new Map<string, Record<string, string>>();
+
+function readEnvFile(filePath: string): Record<string, string> {
+  const cached = envFileCache.get(filePath);
+  if (cached) return cached;
+  let parsed: Record<string, string> = {};
+  try {
+    parsed = parseEnvFile(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    parsed = {}; // 档不存在或不可读 → 空，由调用方落 not_configured
+  }
+  envFileCache.set(filePath, parsed);
+  return parsed;
+}
+
+function isLocalUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function summarizeBody(body: string, max = 300): string {
+  const s = body.replace(/\s+/g, " ").trim();
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+function parseRetryAfter(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const v = value.trim();
+  if (/^\d+$/.test(v)) return parseInt(v, 10) * 1000;
+  const t = Date.parse(v);
+  if (!Number.isNaN(t)) {
+    const ms = t - Date.now();
+    return ms > 0 ? ms : 0;
+  }
+  return undefined;
+}
+
+function parseHeadersFile(raw: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const idx = line.indexOf(":");
+    if (idx > 0) {
+      headers[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim();
+    }
+  }
+  return headers;
+}
+
+interface CurlResult {
+  code: number; // curl exit code
+  stdout: string;
+  stderr: string;
+}
+
+function runCurl(args: string[], input: string | null): Promise<CurlResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("curl", args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    child.on("error", (err) =>
+      reject(new JevError("network", "curl 启动失败", { stderr: err.message }))
+    );
+    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    if (input !== null) {
+      child.stdin.end(input);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+/** 核心传输：调 curl，把 HTTP 状态与 curl 退出码映射为结果或 JevError。不自动重试。 */
+async function request(
+  method: "GET" | "POST",
+  path: string,
+  body: unknown,
+  cfg: JevConfig
+): Promise<unknown> {
+  const { baseUrl, apiKey, proxy, timeoutMs } = resolveConfig(cfg);
+  const url = baseUrl + path;
+  const payload = body === undefined ? null : JSON.stringify(body);
+
+  const dir = fs.mkdtempSync(pathMod.join(os.tmpdir(), "jev-"));
+  const bodyPath = pathMod.join(dir, "body");
+  const hdrPath = pathMod.join(dir, "headers");
+  try {
+    const args = [
+      "-sS",
+      "-o", bodyPath,
+      "-D", hdrPath,
+      "-w", "%{http_code}",
+      "--max-time", String(Math.max(1, Math.ceil(timeoutMs / 1000))),
+      ...(apiKey ? ["-H", `Authorization: Bearer ${apiKey}`] : []),
+      "-H", "Content-Type: application/json",
+      method === "POST" ? "--data" : null,
+      method === "POST" ? "@-" : null,
+      url,
+    ].filter((a): a is string => a !== null);
+    if (proxy && !isLocalUrl(url)) {
+      args.push("-x", proxy);
+    }
+
+    const { code, stdout, stderr } = await runCurl(args, payload);
+    const httpCode = parseInt(stdout.trim(), 10);
+    let respBody = "";
+    let headers: Record<string, string> = {};
+    try {
+      respBody = fs.readFileSync(bodyPath, "utf-8");
+      headers = parseHeadersFile(fs.readFileSync(hdrPath, "utf-8"));
+    } catch {
+      /* 文件缺失则留空 */
+    }
+
+    if (code === 28) {
+      throw new JevError("timeout", `请求超时（--max-time ${Math.ceil(timeoutMs / 1000)}s）`);
+    }
+    if (code !== 0) {
+      throw new JevError("network", `curl 退出码 ${code}`, { stderr: stderr.trim() });
+    }
+    if (Number.isNaN(httpCode)) {
+      throw new JevError("unexpected", "curl 未返回 HTTP 状态码", { stderr: stderr.trim() });
+    }
+
+    switch (httpCode) {
+      case 200:
+        break;
+      case 401:
+        throw new JevError("unauthorized", "认证失败（HTTP 401）", { status: 401 });
+      case 402:
+        throw new JevError("payment_required", "需要付费（HTTP 402）", { status: 402 });
+      case 422:
+        throw new JevError("invalid_request", "请求无效（HTTP 422）", {
+          status: 422,
+          bodySummary: summarizeBody(respBody),
+        });
+      case 429:
+        throw new JevError("rate_limited", "触发限流（HTTP 429）", {
+          status: 429,
+          retryAfterMs: parseRetryAfter(headers["retry-after"]),
+        });
+      case 502:
+      case 504:
+        throw new JevError("upstream", `上游故障（HTTP ${httpCode}）`, { status: httpCode });
+      default:
+        throw new JevError("unexpected", `非预期 HTTP 状态 ${httpCode}`, {
+          status: httpCode,
+          bodySummary: summarizeBody(respBody),
+        });
+    }
+
+    try {
+      return JSON.parse(respBody);
+    } catch {
+      throw new JevError("unexpected", "HTTP 200 但响应体不是合法 JSON", {
+        bodySummary: summarizeBody(respBody),
+      });
+    }
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* 清理失败不影响结果 */
+    }
+  }
+}
+
+export type AskParams = { state: string | object | string[]; questions: Record<string, Question>; model?: string } & JevConfig;
+
+/** System One：对 state 求值一组类型化问题。不自动重试。 */
+export async function ask(params: AskParams): Promise<SystemOneResult> {
+  const { state, questions, model, ...cfg } = params;
+  const res = (await request(
+    "POST",
+    "/v1/systemone",
+    { model: model ?? "oc/jev-1.13-free", state, questions },
+    cfg
+  )) as SystemOneResult;
+  if (!res || typeof res !== "object" || !res.answers) {
+    throw new JevError("unexpected", "响应缺少 answers 字段");
+  }
+  return res;
+}
+
+/** 已连接模型列表。 */
+export async function listModels(cfg: JevConfig = {}): Promise<unknown> {
+  return request("GET", "/v1/models", undefined, cfg);
+}
