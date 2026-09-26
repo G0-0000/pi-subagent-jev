@@ -1,11 +1,48 @@
 {
+  "_global": { "auditProbabilities": false },
   "delegate": {
     "agentDesc": "a file-editing agent without shell access",
     "rules": [
-      { "id": "R1", "blockWhen": "below", "threshold": 0.7, "message": "任务未给出具体文件路径" },
-      { "id": "R2", "blockWhen": "below", "threshold": 0.7, "message": "任务无确定内容" },
-      { "id": "R3", "blockWhen": "above", "threshold": 0.8, "message": "任务要求执行 shell 命令/构建测试，delegate 无 bash 权限" },
-      { "id": "R4", "blockWhen": "above", "threshold": 0.8, "message": "任务要求 agent 自行探索查资料" }
+      {
+        "id": "R1",
+        "instructions": "Does the task give at least one concrete, explicit file path to create or modify?",
+        "blockWhen": "below",
+        "threshold": 0.7,
+        "message": "任务未给出具体文件路径"
+      },
+      {
+        "id": "R2",
+        "instructions": "Does the task provide the definite content or exact edits to apply, so the agent need not draft wording itself nor explore to fill gaps?",
+        "blockWhen": "below",
+        "threshold": 0.7,
+        "message": "任务无确定内容"
+      },
+      {
+        "id": "R3",
+        "instructions": "Does the task require the agent to execute shell commands, run builds, tests, scripts, or restart or verify services?",
+        "blockWhen": "above",
+        "threshold": 0.8,
+        "message": "任务要求执行 shell 命令/构建测试，delegate 无 bash 权限"
+      },
+      {
+        "id": "R4",
+        "instructions": "Does the task require the agent to investigate, explore, or look up information that is not contained in the task itself?",
+        "blockWhen": "above",
+        "threshold": 0.8,
+        "message": "任务要求 agent 自行探索查资料"
+      }
+    ]
+  },
+  "reviewer": {
+    "agentDesc": "a code-review agent (example: custom agent with a new rule id)",
+    "rules": [
+      {
+        "id": "C1",
+        "instructions": "Does the task ask the agent to change public API signatures or break backwards compatibility?",
+        "blockWhen": "above",
+        "threshold": 0.6,
+        "message": "任务可能破坏向后兼容，需人工确认"
+      }
     ]
   }
 }

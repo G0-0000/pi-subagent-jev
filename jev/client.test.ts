@@ -52,7 +52,10 @@ function withNoEnvKey(fn: () => Promise<void>) {
   };
 }
 
-test("① noul happy path：vendor 示例结构，answers.urgent.noul 与 usage 透传", async () => {
+test("① noul happy path：vendor 示例结构，answers.urgent.noul 与 usage 透传", withNoEnvKey(async () => {
+  // withNoEnvKey 隔离进程 env key 与 env 档（指向不存在之唯一路径），此处再隔离 model。
+  const savedModel = process.env.JEV_AI_MODEL;
+  delete process.env.JEV_AI_MODEL; // 隔离外部 model 配置，确保断言内建默认
   const srv = await startServer((req, body, res) => {
     const parsed = JSON.parse(body);
     assert.equal(parsed.model, "oc/jev-1.13-free");
@@ -83,8 +86,10 @@ test("① noul happy path：vendor 示例结构，answers.urgent.noul 与 usage 
     assert.deepEqual(r.usage, { input_tokens: 296, output_tokens: 18 });
   } finally {
     await srv.close();
+    if (savedModel !== undefined) process.env.JEV_AI_MODEL = savedModel;
+    else delete process.env.JEV_AI_MODEL;
   }
-});
+}));
 
 test("② 401 → unauthorized", async () => {
   const srv = await startServer((_req, _b, res) => {
@@ -266,6 +271,8 @@ test("⑪ env 档回退：进程 env 缺席＋临时 env 档有值 → ask/listM
       "OTHER_VAR=ignored\n"
   );
   const saved = process.env.JEV_AI_ENV_FILE;
+  const savedKey = process.env.JEV_AI_API_KEY; // 隔离进程 env key，确保断言档内 key
+  delete process.env.JEV_AI_API_KEY;
   process.env.JEV_AI_ENV_FILE = envPath;
   const srv = await startServer((req, _b, res) => {
     assert.equal(req.headers["authorization"], "Bearer file-key-123");
@@ -288,6 +295,8 @@ test("⑪ env 档回退：进程 env 缺席＋临时 env 档有值 → ask/listM
     await srv.close();
     if (saved !== undefined) process.env.JEV_AI_ENV_FILE = saved;
     else delete process.env.JEV_AI_ENV_FILE;
+    if (savedKey !== undefined) process.env.JEV_AI_API_KEY = savedKey;
+    else delete process.env.JEV_AI_API_KEY;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -323,5 +332,104 @@ test("附加：listModels 无 key（进程 env 缺席＋env 档不存在）→ n
     listModels({ baseUrl: "http://127.0.0.1:9" }),
     (e: unknown) => e instanceof JevError && e.kind === "not_configured"
   );
+}));
+
+test("⑬ 进程 env JEV_AI_MODEL 覆盖内建默认 model", async () => {
+  const savedModel = process.env.JEV_AI_MODEL;
+  process.env.JEV_AI_MODEL = "env-model-from-process";
+  const srv = await startServer((_req, body, res) => {
+    assert.equal(JSON.parse(body).model, "env-model-from-process");
+    res.end(JSON.stringify({ model: "m", answers: { q: { noul: 0.5 } }, usage: {} }));
+  });
+  try {
+    await ask({
+      state: "s",
+      questions: { q: { type: "noul", instructions: "i" } },
+      baseUrl: srv.url,
+      apiKey: "k",
+    });
+  } finally {
+    await srv.close();
+    if (savedModel !== undefined) process.env.JEV_AI_MODEL = savedModel;
+    else delete process.env.JEV_AI_MODEL;
+  }
+});
+
+test("⑭ env 档提供 JEV_AI_MODEL 与 JEV_AI_BASE_URL（进程 env 缺席）→ 均生效", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jev-test-"));
+  const envPath = path.join(dir, "env");
+  const savedEnvFile = process.env.JEV_AI_ENV_FILE;
+  const savedKey = process.env.JEV_AI_API_KEY; // 隔离进程 env key，确保断言档内 key
+  const savedModel = process.env.JEV_AI_MODEL;
+  const savedBaseUrl = process.env.JEV_AI_BASE_URL;
+  delete process.env.JEV_AI_API_KEY;
+  delete process.env.JEV_AI_MODEL;
+  delete process.env.JEV_AI_BASE_URL;
+  const srv = await startServer((req, body, res) => {
+    // 请求能到达本 server 即证明 baseUrl 来自 env 档；再核 model 与 key。
+    assert.equal(req.headers["authorization"], "Bearer file-key-456");
+    assert.equal(JSON.parse(body).model, "file-model-789");
+    res.end(JSON.stringify({ model: "m", answers: { q: { noul: 0.5 } }, usage: {} }));
+  });
+  fs.writeFileSync(
+    envPath,
+    `JEV_AI_API_KEY=file-key-456\nJEV_AI_MODEL=file-model-789\nJEV_AI_BASE_URL=${srv.url}\n`
+  );
+  process.env.JEV_AI_ENV_FILE = envPath;
+  try {
+    // 不传 baseUrl / apiKey / model，全部依赖 env 档。
+    await ask({ state: "s", questions: { q: { type: "noul", instructions: "i" } } });
+  } finally {
+    await srv.close();
+    if (savedEnvFile !== undefined) process.env.JEV_AI_ENV_FILE = savedEnvFile;
+    else delete process.env.JEV_AI_ENV_FILE;
+    if (savedKey !== undefined) process.env.JEV_AI_API_KEY = savedKey;
+    else delete process.env.JEV_AI_API_KEY;
+    if (savedModel !== undefined) process.env.JEV_AI_MODEL = savedModel;
+    else delete process.env.JEV_AI_MODEL;
+    if (savedBaseUrl !== undefined) process.env.JEV_AI_BASE_URL = savedBaseUrl;
+    else delete process.env.JEV_AI_BASE_URL;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("⑮ 显式 model 参数优先于进程 env JEV_AI_MODEL", async () => {
+  const savedModel = process.env.JEV_AI_MODEL;
+  process.env.JEV_AI_MODEL = "env-model-loses";
+  const srv = await startServer((_req, body, res) => {
+    assert.equal(JSON.parse(body).model, "explicit-model-wins");
+    res.end(JSON.stringify({ model: "m", answers: { q: { noul: 0.5 } }, usage: {} }));
+  });
+  try {
+    await ask({
+      state: "s",
+      questions: { q: { type: "noul", instructions: "i" } },
+      model: "explicit-model-wins",
+      baseUrl: srv.url,
+      apiKey: "k",
+    });
+  } finally {
+    await srv.close();
+    if (savedModel !== undefined) process.env.JEV_AI_MODEL = savedModel;
+    else delete process.env.JEV_AI_MODEL;
+  }
+});
+
+test("⑮ baseUrl 全链路缺席 → not_configured", withNoEnvKey(async () => {
+  const savedBaseUrl = process.env.JEV_AI_BASE_URL;
+  delete process.env.JEV_AI_BASE_URL;
+  try {
+    await assert.rejects(
+      () =>
+        ask({
+          apiKey: "test-key",
+          state: "s",
+          questions: { q: { type: "noul", instructions: "i" } },
+        }),
+      (err: unknown) => err instanceof JevError && err.kind === "not_configured"
+    );
+  } finally {
+    if (savedBaseUrl !== undefined) process.env.JEV_AI_BASE_URL = savedBaseUrl;
+  }
 }));
 

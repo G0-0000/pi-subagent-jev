@@ -89,16 +89,19 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  const ruleSets = loadRuleSets(RULES_PATH);
+  const config = loadRuleSets(RULES_PATH);
   pi.on("tool_call", async (event) => {
     if (event.toolName !== "subagent") return;
     const input = event.input as Record<string, unknown>;
     const agent = input.agent;
     const task = input.task;
     if (typeof agent !== "string" || typeof task !== "string") return;
-    if (!(agent in ruleSets)) return;
+    if (!(agent in config.agents)) return;
     try {
-      const res = await checkDispatch(agent, task, { ruleSets });
+      const res = await checkDispatch(agent, task, {
+        ruleSets: config.agents,
+        auditProbabilities: config.global.auditProbabilities,
+      });
       if (!res) return;
       appendFileSync(AUDIT_PATH, JSON.stringify(res.line) + "\n");
       if (res.violations.length > 0) {

@@ -1,5 +1,6 @@
-// JEV API client（9router 本地端点 http://192.168.3.119:8081，LAN 直连免代理）。零 npm 依赖，curl 传输。
-// 任何输出 / 错误消息不得包含 API key。
+// JEV API client（端点由 JEV_AI_BASE_URL 配置，无内建默认）。零 npm 依赖，curl 传输。
+// 任何输出 / 错误消息不得包含 API key。env 档（~/.config/jev-comp/env）可配三键：
+// JEV_AI_API_KEY / JEV_AI_BASE_URL / JEV_AI_MODEL（model 仅作用于 ask()）。
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -85,17 +86,26 @@ type ResolvedConfig = {
   timeoutMs: number;
 };
 
+/** env 档路径解析序：显式参数 envFile > 进程 env JEV_AI_ENV_FILE > 默认 ~/.config/jev-comp/env。 */
+function resolveEnvFilePath(cfg: JevConfig): string {
+  return (
+    cfg.envFile ??
+    process.env.JEV_AI_ENV_FILE ??
+    pathMod.join(os.homedir(), ".config", "jev-comp", "env")
+  );
+}
+
 function resolveConfig(cfg: JevConfig = {}): ResolvedConfig {
   // key 解析序：显式参数 > 进程 env JEV_AI_API_KEY > env 档；全落空 → not_configured。
+  // baseUrl 解析序：显式参数 > 进程 env JEV_AI_BASE_URL > env 档；全落空 → not_configured。
   // 红线：key 之值绝不得进入任何错误消息 / 日志 / 返回文本。
+  const envFilePath = resolveEnvFilePath(cfg);
   let apiKey = "";
   if (cfg.apiKey !== undefined) {
     apiKey = cfg.apiKey;
   } else if (process.env.JEV_AI_API_KEY) {
     apiKey = process.env.JEV_AI_API_KEY;
   } else {
-    const envFilePath =
-      cfg.envFile ?? process.env.JEV_AI_ENV_FILE ?? pathMod.join(os.homedir(), ".config", "jev-comp", "env");
     apiKey = readEnvFile(envFilePath).JEV_AI_API_KEY || "";
   }
   if (!apiKey) {
@@ -104,11 +114,19 @@ function resolveConfig(cfg: JevConfig = {}): ResolvedConfig {
       "JEV API key 未配置（解析序：显式参数 apiKey → 环境变量 JEV_AI_API_KEY → env 档 JEV_AI_ENV_FILE/~/.config/jev-comp/env，均未得）"
     );
   }
-  const baseUrl = (
+  const rawBaseUrl =
     cfg.baseUrl !== undefined
       ? cfg.baseUrl
-      : process.env.JEV_AI_BASE_URL || "http://192.168.3.119:8081"
-  ).replace(/\/+$/, "");
+      : process.env.JEV_AI_BASE_URL ||
+        readEnvFile(envFilePath).JEV_AI_BASE_URL ||
+        "";
+  if (!rawBaseUrl) {
+    throw new JevError(
+      "not_configured",
+      "JEV_AI_BASE_URL 未配置（解析序：显式参数 baseUrl → 环境变量 JEV_AI_BASE_URL → env 档，均未得）"
+    );
+  }
+  const baseUrl = rawBaseUrl.replace(/\/+$/, "");
   const proxy =
     cfg.proxy !== undefined ? cfg.proxy : process.env.JEV_AI_PROXY || "";
   const timeoutMs = cfg.timeoutMs !== undefined ? cfg.timeoutMs : 30_000;
@@ -316,10 +334,16 @@ export type AskParams = { state: string | object | string[]; questions: Record<s
 /** System One：对 state 求值一组类型化问题。不自动重试。 */
 export async function ask(params: AskParams): Promise<SystemOneResult> {
   const { state, questions, model, ...cfg } = params;
+  // model 解析序：显式参数 > 进程 env JEV_AI_MODEL > env 档 > 内建默认（env 档路径与 apiKey 同序）。
+  const resolvedModel =
+    model ??
+    (process.env.JEV_AI_MODEL ||
+      readEnvFile(resolveEnvFilePath(cfg)).JEV_AI_MODEL ||
+      "oc/jev-1.13-free");
   const res = (await request(
     "POST",
     "/v1/systemone",
-    { model: model ?? "oc/jev-1.13-free", state, questions },
+    { model: resolvedModel, state, questions },
     cfg
   )) as SystemOneResult;
   if (!res || typeof res !== "object" || !res.answers) {

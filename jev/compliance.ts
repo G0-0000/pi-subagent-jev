@@ -2,12 +2,14 @@
 // 对命中规则集的 subagent 派单，把任务原文打包为 state，向 System One 一次性求值四问：
 // 审计侧按阈值矩阵出 verdict 落 audit.jsonl；拦截侧按每规则之 blockWhen/threshold 判命中，
 // 命中则把该规则 message 收进 violations，由调用方（扩展壳）据此 block 派单。
-// R1/R2 为正例规则（below：p 低于阈值即拦），R3/R4 为反例规则（above：p 高于阈值即拦）。
+// 规则全由配置驱动：规则 id 为任意字符串，每规则自带 blockWhen（below/above）与 threshold，
+// verdict 标签与拦截判定均按配置计算，无硬编码规则 id。
 // 任何错误 fail-open：JEV 出错、配置档出错、概率缺失皆放行，绝不外抛。
 import { ask as defaultAsk, JevError, type AskParams, type SystemOneResult } from "./client.ts";
 import { readFileSync } from "node:fs";
 
-export type RuleId = "R1" | "R2" | "R3" | "R4";
+/** 规则 id：任意字符串（R1-R4 仅为内建默认，配置档可自定义新 id）。 */
+export type RuleId = string;
 
 export type RuleConfig = {
   id: RuleId;
@@ -20,7 +22,7 @@ export type RuleConfig = {
 
 export type AgentRuleSet = { agentDesc: string; rules: RuleConfig[] };
 
-/** 各 agent 的审计规则集。R1/R2 为正例规则（应真），R3/R4 为反例规则（应假）。 */
+/** 内建默认规则集（仅作配置档之缺省；可被配置档覆盖或扩展新 agent/新规则）。 */
 export const RULE_SETS: Record<string, AgentRuleSet> = {
   delegate: {
     agentDesc: "a file-editing agent without shell access",
@@ -66,41 +68,41 @@ export function buildState(agent: string, agentDesc: string, task: string): stri
   return `The following is a task dispatched to a sub-agent named "${agent}", ${agentDesc}. Task text follows.\n${task}`;
 }
 
-export type RuleLabel = "pass" | "fail" | "suspect" | "violation" | "clean";
-export type OverallVerdict = "compliant" | "suspect" | "violation" | "error";
+export type RuleLabel = "pass" | "fail" | "suspect" | "clean" | "unknown";
+export type OverallVerdict = "pass" | "violation" | "error";
 
 export type VerdictResult = {
-  rules: Record<RuleId, RuleLabel>;
+  rules: Record<string, RuleLabel>;
   verdict: OverallVerdict;
 };
 
 /**
- * 阈值矩阵（仅供审计记录，不参与拦截判定）：
- * 正例规则 R1/R2：p ≥ 0.7 → pass，p ≤ 0.3 → fail，余 suspect。
- * 反例规则 R3/R4：p ≥ 0.7 → violation，p ≤ 0.3 → clean，余 suspect。
- * 综合：任一 fail/violation → violation；否则任一 suspect → suspect；否则 compliant。
+ * 审计标签矩阵（仅供审计记录，不参与拦截判定；blockWhen/threshold 全由配置驱动，无硬编码规则 id）：
+ * below 规则：p < threshold → fail，否则 pass；above 规则：p > threshold → suspect，否则 clean。
+ * 概率缺失/非有限 → unknown（仅审计记录，永不拦截）。
+ * 综合：任一 fail/suspect → violation；否则 pass。
  */
-export function verdict(probs: Record<RuleId, number>): VerdictResult {
-  const rules = {} as Record<RuleId, RuleLabel>;
-  const positive: RuleId[] = ["R1", "R2"];
-  const negative: RuleId[] = ["R3", "R4"];
-  for (const id of positive) {
-    const p = probs[id];
-    rules[id] = p >= 0.7 ? "pass" : p <= 0.3 ? "fail" : "suspect";
+export function verdict(rules: RuleConfig[], probs: Record<string, number>): VerdictResult {
+  const labels: Record<string, RuleLabel> = {};
+  for (const r of rules) {
+    const p = probs[r.id];
+    labels[r.id] =
+      !(typeof p === "number" && Number.isFinite(p))
+        ? "unknown"
+        : r.blockWhen === "below"
+          ? p < r.threshold
+            ? "fail"
+            : "pass"
+          : p > r.threshold
+            ? "suspect"
+            : "clean";
   }
-  for (const id of negative) {
-    const p = probs[id];
-    rules[id] = p >= 0.7 ? "violation" : p <= 0.3 ? "clean" : "suspect";
-  }
-  let overall: OverallVerdict;
-  if (positive.concat(negative).some((id) => rules[id] === "fail" || rules[id] === "violation")) {
-    overall = "violation";
-  } else if (positive.concat(negative).some((id) => rules[id] === "suspect")) {
-    overall = "suspect";
-  } else {
-    overall = "compliant";
-  }
-  return { rules, verdict: overall };
+  const overall: OverallVerdict = Object.values(labels).some(
+    (l) => l === "fail" || l === "suspect"
+  )
+    ? "violation"
+    : "pass";
+  return { rules: labels, verdict: overall };
 }
 
 export type AuditLineFields = {
@@ -108,10 +110,11 @@ export type AuditLineFields = {
   agent: string;
   task: string;
   model?: string | null;
-  rules?: Record<RuleId, RuleLabel> | null;
+  rules?: Record<string, RuleLabel> | null;
   verdict: OverallVerdict;
   latencyMs: number;
   blocked?: string[];
+  probs?: Record<string, number>;
   error?: string;
 };
 
@@ -120,10 +123,11 @@ export type AuditLine = {
   agent: string;
   task_excerpt: string;
   model: string | null;
-  rules: Record<RuleId, RuleLabel> | null;
+  rules: Record<string, RuleLabel> | null;
   verdict: OverallVerdict;
   latency_ms: number;
   blocked?: string[];
+  probs?: Record<string, number>;
   error?: string;
 };
 
@@ -139,11 +143,12 @@ export function auditLine(fields: AuditLineFields): AuditLine {
     latency_ms: fields.latencyMs,
   };
   if (fields.blocked && fields.blocked.length > 0) line.blocked = fields.blocked;
+  if (fields.probs) line.probs = fields.probs;
   if (fields.error !== undefined) line.error = fields.error;
   return line;
 }
 
-/** 配置档中单个规则条目：只需给可调项，instructions 以内建为准。 */
+/** 配置档中单个规则条目：字段皆可覆盖；instructions 亦以配置档为准，内建仅作缺省。 */
 type RawRule = {
   id?: unknown;
   instructions?: unknown;
@@ -154,25 +159,44 @@ type RawRule = {
 
 type RawRuleSet = { agentDesc?: unknown; rules?: unknown };
 
+/** loadRuleSets 返回：合并后规则集 ＋ 全局开关。 */
+export type LoadedRules = {
+  agents: Record<string, AgentRuleSet>;
+  global: { auditProbabilities: boolean };
+};
+
+/** 配置档顶层保留键：全局开关，不视作 agent 名。 */
+const GLOBAL_KEY = "_global";
+
 /**
  * 读配置档并按 agent→rule id 合并覆盖内建 RULE_SETS：
- * 已知 agent 之已知规则按字段覆盖（instructions 始终以内建为准），JSON 中新 id 追加其后；
- * JSON 中未知 agent 整组加入。任何读取/解析错误 → 静默返内建默认（fail-open）。
+ * 已知 agent 之已知规则按字段覆盖（instructions 亦以配置档为准，内建仅作缺省），
+ * JSON 中新 id 追加其后；JSON 中未知 agent 整组加入。
+ * `_global: { auditProbabilities }` 为全局开关（缺省 false），控制审计行是否附 probs。
+ * 任何读取/解析错误 → 静默返内建默认（fail-open）。
  */
-export function loadRuleSets(path: string): Record<string, AgentRuleSet> {
+export function loadRuleSets(path: string): LoadedRules {
+  const fallback = (): LoadedRules => ({
+    agents: RULE_SETS,
+    global: { auditProbabilities: false },
+  });
   let raw: Record<string, RawRuleSet>;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8"));
-    if (!parsed || typeof parsed !== "object") return RULE_SETS;
+    if (!parsed || typeof parsed !== "object") return fallback();
     raw = parsed as Record<string, RawRuleSet>;
   } catch {
-    return RULE_SETS;
+    return fallback();
   }
+  const g = (raw as Record<string, unknown>)[GLOBAL_KEY];
+  const auditProbabilities =
+    !!g && typeof g === "object" && (g as Record<string, unknown>).auditProbabilities === true;
   const merged: Record<string, AgentRuleSet> = {};
   for (const [agent, rs] of Object.entries(RULE_SETS)) {
     merged[agent] = { agentDesc: rs.agentDesc, rules: rs.rules.map((r) => ({ ...r })) };
   }
   for (const [agent, cfg] of Object.entries(raw)) {
+    if (agent === GLOBAL_KEY) continue;
     if (!cfg || typeof cfg !== "object") continue;
     const base = merged[agent];
     const order: RuleId[] = [];
@@ -189,7 +213,7 @@ export function loadRuleSets(path: string): Record<string, AgentRuleSet> {
       const next: RuleConfig = {
         id,
         instructions:
-          prev?.instructions ?? (typeof item.instructions === "string" ? item.instructions : ""),
+          typeof item.instructions === "string" ? item.instructions : prev?.instructions ?? "",
         blockWhen:
           item.blockWhen === "below" || item.blockWhen === "above"
             ? item.blockWhen
@@ -206,7 +230,7 @@ export function loadRuleSets(path: string): Record<string, AgentRuleSet> {
       rules: order.map((id) => byId.get(id)!),
     };
   }
-  return merged;
+  return { agents: merged, global: { auditProbabilities } };
 }
 
 export type AskFn = (params: AskParams) => Promise<SystemOneResult>;
@@ -214,40 +238,54 @@ export type AskFn = (params: AskParams) => Promise<SystemOneResult>;
 export type CheckResult = { line: AuditLine; violations: string[] };
 
 /**
- * 主流程：agent 不在规则集 → null；
- * 在则 buildState ＋四问（noul）打包一次请求 ＋ verdict ＋ 逐规则拦截判定 ＋ auditLine。
+ * 主流程：agent 不在规则集 → null；在则取该 agent 有效规则（instructions 为空/空白者跳过，
+ * 全部无效亦返 null），buildState ＋ noul 问打包一次请求 ＋ verdict ＋ 逐规则拦截判定 ＋ auditLine。
  * 拦截判定：(blockWhen==="below" && p < threshold) || (blockWhen==="above" && p > threshold)，
  * 命中者以 `${id}: ${message}` 全列入 violations，规则 id 全列入 line.blocked。
+ * noul 字段缺失或非有限数：该规则标 unknown、不拦（fail-open，红线三）。
+ * opts.auditProbabilities 为 true 时审计行附 probs（规则 id → 原始概率，仅有限值）。
  * JevError（及任何异常）捕获 → 返 error 行且 violations 为空，fail-open，绝不外抛。
  */
 export async function checkDispatch(
   agent: string,
   task: string,
-  opts: { askFn?: AskFn; ruleSets?: Record<string, AgentRuleSet> } = {}
+  opts: {
+    askFn?: AskFn;
+    ruleSets?: Record<string, AgentRuleSet>;
+    auditProbabilities?: boolean;
+  } = {}
 ): Promise<CheckResult | null> {
   const ruleSets = opts.ruleSets ?? RULE_SETS;
   const rs = ruleSets[agent];
   if (!rs) return null;
+  // instructions 为空/空白的规则无可问之题，检查时跳过（fail-open）
+  const rules = rs.rules.filter(
+    (r) => typeof r.instructions === "string" && r.instructions.trim() !== ""
+  );
+  if (rules.length === 0) return null;
   const askFn = opts.askFn ?? defaultAsk;
   const start = Date.now();
   try {
     const questions = Object.fromEntries(
-      rs.rules.map((r) => [r.id, { type: "noul" as const, instructions: r.instructions }])
+      rules.map((r) => [r.id, { type: "noul" as const, instructions: r.instructions }])
     );
     const res = await askFn({
       state: buildState(agent, rs.agentDesc, task),
       questions,
     });
-    const answers = res.answers as Record<string, { noul: number }>;
-    const probs = Object.fromEntries(
-      rs.rules.map((r) => [r.id, Number(answers[r.id]?.noul ?? 0)])
-    ) as Record<RuleId, number>;
-    const v = verdict(probs);
+    const answers = res.answers as Record<string, { noul?: unknown }>;
+    // noul 缺失或非有限数：不进 probs → 审计标 unknown、不拦（fail-open，红线三）
+    const probs: Record<string, number> = {};
+    for (const r of rules) {
+      const raw = answers[r.id]?.noul;
+      if (typeof raw === "number" && Number.isFinite(raw)) probs[r.id] = raw;
+    }
+    const v = verdict(rules, probs);
     const blocked: string[] = [];
     const violations: string[] = [];
-    for (const r of rs.rules) {
+    for (const r of rules) {
       const p = probs[r.id];
-      if (!Number.isFinite(p)) continue; // 概率缺失：该规则不拦（fail-open）
+      if (p === undefined) continue; // 概率缺失：该规则不拦（fail-open）
       const hit = r.blockWhen === "below" ? p < r.threshold : p > r.threshold;
       if (hit) {
         blocked.push(r.id);
@@ -263,6 +301,7 @@ export async function checkDispatch(
         verdict: v.verdict,
         latencyMs: Date.now() - start,
         blocked,
+        probs: opts.auditProbabilities ? probs : undefined,
       }),
       violations,
     };

@@ -16,30 +16,32 @@ import {
   type AskFn,
 } from "./compliance.ts";
 
-test("① verdict 全绿：R1/R2 高、R3/R4 低 → compliant", () => {
-  const r = verdict({ R1: 0.9, R2: 0.85, R3: 0.05, R4: 0.2 });
+test("① verdict 全绿：R1/R2 高、R3/R4 低 → pass", () => {
+  const r = verdict(RULE_SETS.delegate.rules, { R1: 0.9, R2: 0.85, R3: 0.05, R4: 0.2 });
   assert.deepEqual(r.rules, { R1: "pass", R2: "pass", R3: "clean", R4: "clean" });
-  assert.equal(r.verdict, "compliant");
+  assert.equal(r.verdict, "pass");
 });
 
-test("② verdict 阈值边界 0.7/0.3：恰在边界取 pass/violation/clean", () => {
-  const r = verdict({ R1: 0.7, R2: 0.3, R3: 0.7, R4: 0.3 });
-  assert.deepEqual(r.rules, { R1: "pass", R2: "fail", R3: "violation", R4: "clean" });
-  // 任一 fail/violation → violation（优先于 suspect）
+test("② verdict 按 blockWhen/threshold：below 低于阈值→fail、above 高于阈值→suspect，恰在阈值取 pass/clean", () => {
+  const r = verdict(RULE_SETS.delegate.rules, { R1: 0.7, R2: 0.3, R3: 0.8, R4: 0.3 });
+  assert.deepEqual(r.rules, { R1: "pass", R2: "fail", R3: "clean", R4: "clean" });
+  // 任一 fail/suspect → violation
   assert.equal(r.verdict, "violation");
 });
 
-test("③ verdict 边界外侧：0.71 pass、0.69 suspect；0.31/0.29 反例", () => {
-  assert.equal(verdict({ R1: 0.71, R2: 0.71, R3: 0.29, R4: 0.29 }).verdict, "compliant");
-  const r = verdict({ R1: 0.69, R2: 0.9, R3: 0.31, R4: 0.1 });
-  assert.deepEqual(r.rules, { R1: "suspect", R2: "pass", R3: "suspect", R4: "clean" });
-  assert.equal(r.verdict, "suspect");
+test("③ verdict 概率缺失/非有限 → unknown，不参与综合判定", () => {
+  const r = verdict(RULE_SETS.delegate.rules, { R1: 0.9, R2: 0.9, R4: 0.1 }); // R3 缺失
+  assert.equal(r.rules.R3, "unknown");
+  assert.equal(r.verdict, "pass");
+  const r2 = verdict(RULE_SETS.delegate.rules, { R1: 0.9, R2: 0.9, R3: NaN, R4: 0.1 });
+  assert.equal(r2.rules.R3, "unknown");
+  assert.equal(r2.verdict, "pass");
 });
 
-test("④ verdict 混合 suspect：无 fail/violation 但有 suspect → suspect", () => {
-  const r = verdict({ R1: 0.5, R2: 0.8, R3: 0.1, R4: 0.5 });
-  assert.deepEqual(r.rules, { R1: "suspect", R2: "pass", R3: "clean", R4: "suspect" });
-  assert.equal(r.verdict, "suspect");
+test("④ verdict above 超阈值 → suspect，综合亦 violation", () => {
+  const r = verdict(RULE_SETS.delegate.rules, { R1: 0.9, R2: 0.9, R3: 0.05, R4: 0.9 });
+  assert.deepEqual(r.rules, { R1: "pass", R2: "pass", R3: "clean", R4: "suspect" });
+  assert.equal(r.verdict, "violation");
 });
 
 test("⑤ buildState 模板拼接：agent 名、agentDesc、任务原文逐字（中文不动）", () => {
@@ -59,7 +61,7 @@ test("⑥ auditLine：task_excerpt ≤200 字（码点截断）、error 字段�
     task: longTask,
     model: "oc/jev-1.13-free",
     rules: { R1: "pass", R2: "pass", R3: "clean", R4: "clean" },
-    verdict: "compliant",
+    verdict: "pass",
     latencyMs: 123,
   });
   assert.equal(Array.from(line.task_excerpt).length, 200);
@@ -101,7 +103,7 @@ test("⑦ checkDispatch 命中 delegate：mock askFn 四问打包一次、verdic
   assert.ok(res);
   const line = res.line;
   assert.deepEqual(line.rules, { R1: "pass", R2: "fail", R3: "clean", R4: "clean" });
-  assert.equal(line.verdict, "violation"); // R2 fail 优先
+  assert.equal(line.verdict, "violation"); // R2 fail
   assert.equal(line.agent, "delegate");
   assert.equal(line.model, "oc/jev-1.13-free");
   assert.equal(line.task_excerpt, TASK);
@@ -179,7 +181,7 @@ test("⑪ 拦截判定边界：below 恰在阈值不拦、above 恰在阈值不�
   assert.equal(r2!.line.blocked, undefined);
 });
 
-test("⑫ loadRuleSets：覆盖内建阈值/消息、instructions 以内建为准、未知 agent 整组加入", () => {
+test("⑫ loadRuleSets：覆盖内建字段（instructions 亦以配置档为准）、新 agent 整组加入", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const p = path.join(dir, "rules.json");
   writeFileSync(
@@ -195,22 +197,134 @@ test("⑫ loadRuleSets：覆盖内建阈值/消息、instructions 以内建为�
     })
   );
   const rs = loadRuleSets(p);
-  const r1 = rs.delegate.rules.find((r) => r.id === "R1")!;
+  const r1 = rs.agents.delegate.rules.find((r) => r.id === "R1")!;
   assert.equal(r1.threshold, 0.95);
   assert.equal(r1.message, "R1 改过的消息");
-  assert.equal(r1.instructions, RULE_SETS.delegate.rules.find((r) => r.id === "R1")!.instructions);
-  assert.equal(rs.delegate.agentDesc, RULE_SETS.delegate.agentDesc);
-  assert.ok(rs.delegate.rules.some((r) => r.id === "R9" && r.threshold === 0.5));
-  assert.equal(rs.worker.agentDesc, "a generic worker");
-  assert.equal(rs.worker.rules[0].threshold, 0.4);
+  assert.equal(r1.instructions, "恶意覆盖"); // 配置档 instructions 覆盖内建
+  assert.equal(rs.agents.delegate.agentDesc, RULE_SETS.delegate.agentDesc);
+  assert.ok(rs.agents.delegate.rules.some((r) => r.id === "R9" && r.threshold === 0.5));
+  assert.equal(rs.agents.worker.agentDesc, "a generic worker");
+  assert.equal(rs.agents.worker.rules[0].threshold, 0.4);
   // 内建未被就地改动
   assert.equal(RULE_SETS.delegate.rules.find((r) => r.id === "R1")!.threshold, 0.7);
 });
 
 test("⑬ loadRuleSets：档不存在／JSON 坏 → 静默返内建默认（fail-open）", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
-  assert.equal(loadRuleSets(path.join(dir, "nope.json")), RULE_SETS);
+  const none = loadRuleSets(path.join(dir, "nope.json"));
+  assert.equal(none.agents, RULE_SETS);
+  assert.equal(none.global.auditProbabilities, false);
   const bad = path.join(dir, "bad.json");
   writeFileSync(bad, "{ not json");
-  assert.equal(loadRuleSets(bad), RULE_SETS);
+  const badRes = loadRuleSets(bad);
+  assert.equal(badRes.agents, RULE_SETS);
+  assert.equal(badRes.global.auditProbabilities, false);
+});
+
+test("⑭ loadRuleSets/_global：不视作 agent，auditProbabilities 解析，缺省 false", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const on = path.join(dir, "on.json");
+  writeFileSync(
+    on,
+    JSON.stringify({
+      _global: { auditProbabilities: true },
+      delegate: { rules: [{ id: "R1", threshold: 0.9 }] },
+    })
+  );
+  const rsOn = loadRuleSets(on);
+  assert.equal(rsOn.global.auditProbabilities, true);
+  assert.equal(rsOn.agents["_global"], undefined); // 不视作 agent
+  assert.ok("delegate" in rsOn.agents);
+
+  const off = path.join(dir, "off.json");
+  writeFileSync(off, JSON.stringify({ delegate: { rules: [] } }));
+  const rsOff = loadRuleSets(off);
+  assert.equal(rsOff.global.auditProbabilities, false);
+  assert.equal(rsOff.agents["_global"], undefined);
+});
+
+test("⑮ checkDispatch：JSON 新 agent＋新规则 id 命中阈值即拦", async () => {
+  const ruleSets = {
+    reviewer: {
+      agentDesc: "a code-review agent",
+      rules: [
+        {
+          id: "C1",
+          instructions: "Does the task break backwards compatibility?",
+          blockWhen: "above" as const,
+          threshold: 0.6,
+          message: "自定义违规",
+        },
+      ],
+    },
+  };
+  let asked = 0;
+  const askFn: AskFn = async (params) => {
+    asked++;
+    assert.deepEqual(Object.keys(params.questions), ["C1"]);
+    assert.equal(params.questions.C1.instructions, "Does the task break backwards compatibility?");
+    return {
+      model: "m",
+      answers: { C1: { noul: 0.9 } },
+      usage: {},
+    };
+  };
+  const res = await checkDispatch("reviewer", TASK, { askFn, ruleSets });
+  assert.equal(asked, 1);
+  assert.ok(res);
+  assert.equal(res.line.rules!.C1, "suspect");
+  assert.equal(res.line.verdict, "violation");
+  assert.deepEqual(res.violations, ["C1: 自定义违规"]);
+  assert.deepEqual(res.line.blocked, ["C1"]);
+});
+
+test("⑯ checkDispatch：noul 字段缺失 → 该规则跳过不拦，审计标 unknown（fail-open）", async () => {
+  const askFn: AskFn = async () => ({
+    model: "m",
+    // R1 之 noul 字段整体缺失；R2 之 noul 非数字
+    answers: { R2: { noul: 0.9 }, R3: { noul: 0.1 }, R4: { noul: "oops" } } as never,
+    usage: {},
+  });
+  const res = await checkDispatch("delegate", TASK, { askFn });
+  assert.ok(res);
+  assert.equal(res.line.rules!.R1, "unknown");
+  assert.equal(res.line.rules!.R2, "pass");
+  assert.equal(res.line.rules!.R4, "unknown");
+  assert.equal(res.line.verdict, "pass"); // unknown 不参与综合
+  assert.deepEqual(res.violations, []);
+  assert.equal(res.line.blocked, undefined);
+});
+
+test("⑰ checkDispatch auditProbabilities：true → line.probs 含原始数值；缺省/false → 无 probs 键", async () => {
+  const askFn: AskFn = async () => ({
+    model: "m",
+    answers: { R1: { noul: 0.9 }, R2: { noul: 0.2 }, R3: { noul: 0.05 }, R4: { noul: 0.1 } },
+    usage: {},
+  });
+  const on = await checkDispatch("delegate", TASK, { askFn, auditProbabilities: true });
+  assert.deepEqual(on!.line.probs, { R1: 0.9, R2: 0.2, R3: 0.05, R4: 0.1 });
+  const off = await checkDispatch("delegate", TASK, { askFn });
+  assert.equal(off!.line.probs, undefined);
+  assert.ok(!("probs" in off!.line));
+});
+
+test("⑱ checkDispatch：instructions 为空/空白的规则检查时跳过，不发问不拦", async () => {
+  const ruleSets = {
+    worker: {
+      agentDesc: "a worker",
+      rules: [
+        { id: "X1", instructions: "   ", blockWhen: "below" as const, threshold: 0.5, message: "空白问题" },
+        { id: "X2", instructions: "Is this ok?", blockWhen: "below" as const, threshold: 0.5, message: "X2 违规" },
+      ],
+    },
+  };
+  const askFn: AskFn = async (params) => {
+    assert.deepEqual(Object.keys(params.questions), ["X2"]); // X1 不发问
+    return { model: "m", answers: { X2: { noul: 0.9 } }, usage: {} };
+  };
+  const res = await checkDispatch("worker", TASK, { askFn, ruleSets });
+  assert.ok(res);
+  assert.deepEqual(Object.keys(res.line.rules!), ["X2"]); // X1 不进审计
+  assert.equal(res.line.verdict, "pass");
+  assert.deepEqual(res.violations, []);
 });
