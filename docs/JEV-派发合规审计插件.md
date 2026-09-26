@@ -11,12 +11,12 @@
 
 | 层 | 文件 | 职责 |
 |---|---|---|
-| 客户端 | `~/.pi/agent/jev/client.ts` | 9router 端点传输（零 npm 依赖、curl）、错误映射、key 解析 |
-| 纯逻辑 | `~/.pi/agent/jev/compliance.ts` | 规则集、state 拼装、阈值矩阵、verdict、审计行构造（可测、不触 IO） |
+| 客户端 | `~/.pi/agent/jev-comp/client.ts` | 9router 端点传输（零 npm 依赖、curl）、错误映射、key 解析 |
+| 纯逻辑 | `~/.pi/agent/jev-comp/compliance.ts` | 规则集、state 拼装、阈值矩阵、verdict、审计行构造（可测、不触 IO） |
 | 工具扩展 | `~/.pi/agent/extensions/jev.ts` | 注册 `jev_ask` / `jev_models` 两工具，供手工调用 |
 | 审计插件 | `~/.pi/agent/extensions/jev-compliance.ts` | 钩 pi 扩展 `tool_call` 事件观察 subagent 派发，fire-and-forget 审计并落档 |
-| 配置 | `~/.config/jev/env`（600）＋ `~/.bashrc` 末行 source | key 落盘回退，pi 任意启动方式皆得钥 |
-| 校准/产物 | `~/.pi/agent/jev/scripts/calibrate.ts`、`calibration-20260925.jsonl`、`audit.jsonl` | 阈值校准脚本与判定留痕 |
+| 配置 | `~/.config/jev-comp/env`（600）＋ `~/.bashrc` 末行 source | key 落盘回退，pi 任意启动方式皆得钥 |
+| 校准/产物 | `~/.pi/agent/jev-comp/scripts/calibrate.ts`、`calibration-20260925.jsonl`、`audit.jsonl` | 阈值校准脚本与判定留痕 |
 
 `~/.pi/agent/extensions/` 下散档由 pi 自动发现加载，**无需**在 `settings.json` 登记。
 
@@ -27,13 +27,13 @@
 - **传输**：`spawn curl`，`-w %{http_code}` 取状态码、`-D` 存响应头（为读 `Retry-After`）、body 落临时目录（`mkdtempSync`＋`finally` 清理）。
 - **错误映射**：401→`unauthorized`／402→`payment_required`／422→`invalid_request`（带响应体摘要）／429→`rate_limited`（解析 `Retry-After`，数字或 HTTP 日期，得 `retryAfterMs`）／502、504→`upstream`／curl 28→`timeout`／其他退出码→`network`／其余→`unexpected`；key 全落空→`not_configured`。
 - **不自动重试**（硬约束）：429 只上报 `retryAfterMs`，curl 35 之类瞬断如实记录不补救。单测⑩ 断言 429 时服务端只收到 1 次请求。
-- **key 解析序**：显式参数 `apiKey` → 进程 env `JEV_AI_API_KEY` → env 档（路径序：显式 `envFile` → `JEV_AI_ENV_FILE` → 默认 `~/.config/jev/env`）；env 档识 `export KEY=VALUE` 与 `KEY=VALUE`、去成对引号、进程内缓存。key 值绝不出现在消息/日志/返回文本。
+- **key 解析序**：显式参数 `apiKey` → 进程 env `JEV_AI_API_KEY` → env 档（路径序：显式 `envFile` → `JEV_AI_ENV_FILE` → 默认 `~/.config/jev-comp/env`）；env 档识 `export KEY=VALUE` 与 `KEY=VALUE`、去成对引号、进程内缓存。key 值绝不出现在消息/日志/返回文本。
 
 ## ③ key 配置
 
 ```
-~/.config/jev/env      # 600，内容形如 export JEV_AI_API_KEY=...（9router key，勿回显）
-~/.bashrc 末行：[ -f ~/.config/jev/env ] && . ~/.config/jev/env
+~/.config/jev-comp/env      # 600，内容形如 export JEV_AI_API_KEY=...（9router key，勿回显）
+~/.bashrc 末行：[ -f ~/.config/jev-comp/env ] && . ~/.config/jev-comp/env
 ```
 
 > **为何必须落盘回退**：pi **不加载 `.env`**；进程环境变量是**启动快照**，不追溯新 `export`——旧 shell 里重启 pi 仍拿不到新变量。以 600 权限 env 档作回退后，pi 无论何种启动方式都能自取到钥（与 `auth.json` 存凭据同义）。本档全文不录任何 key 值。
@@ -69,7 +69,7 @@ cd ~/.pi/agent/jev && node --test *.test.ts   # 25/25 绿
 
 - `client.test.ts` **15**：noul happy path、401/402/422/429(Retry-After:7)/502/504、连不通端口、无 key、显式空 key、choice/score 解析、**429 仅 1 次请求（无重试）**、env 档回退、env 档缺失、listModels 两条。
 - `compliance.test.ts` **10**：verdict 全绿、0.7/0.3 边界、边界外侧、混合 suspect、buildState 拼接、auditLine 截断与可选 error、命中 delegate（mock `askFn` 四问打包一次）、未命中返 null 且不调 askFn、抛 `JevError` 与抛非 `JevError` 皆返 error 行（fail-open）。
-- 校准：`set -a; . ~/.config/jev/env; set +a; node scripts/calibrate.ts`（六 case A–F，结果追加至 `calibration-20260925.jsonl`，每行带 `endpoint:"9router"`；旧行不动）。
+- 校准：`set -a; . ~/.config/jev-comp/env; set +a; node scripts/calibrate.ts`（六 case A–F，结果追加至 `calibration-20260925.jsonl`，每行带 `endpoint:"9router"`；旧行不动）。
 
 ## ⑥ 阈值校准（六样本，6/6 符）
 
@@ -95,7 +95,7 @@ cd ~/.pi/agent/jev && node --test *.test.ts   # 25/25 绿
 
 ## ⑧ 后续
 
-- **先滚数据**：以审计模态积累判例（`~/.pi/agent/jev/audit.jsonl`），无问题再扩他 agent 的规则集（`RULE_SETS` 按 agent 名挂）。
+- **先滚数据**：以审计模态积累判例（`~/.pi/agent/jev-comp/audit.jsonl`），无问题再扩他 agent 的规则集（`RULE_SETS` 按 agent 名挂）。
 - **阻断升级俟后议**：`tool_call` 事件本支持 block，但现一律 fail-open；待判例积厚、误报率可评后再议是否对 `violation` 阻断。
 - 现状留痕：审计档首行即一次 `error`（`unauthorized` HTTP 401，key 回退改动前），次行起为真实判定（`compliant`，model `jev-1.13-free`，6.7s）——可作功能自检样本。
 

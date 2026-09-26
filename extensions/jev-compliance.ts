@@ -1,7 +1,7 @@
 // 派发合规拦截薄壳：钩 tool_call 事件拦截他扩展注册的 subagent 工具。
 // 拦截式：await 审核结果，命中违规即返 { block: true, reason }，subagent 不召唤，
-// reason 作为错误结果返给主 agent；不命中则放行。审核结果一律追加 ~/.pi/agent/jev/audit.jsonl。
-// fail-open：JEV 出错、配置档（~/.pi/agent/jev/compliance-rules.json）出错、任何异常皆放行。
+// reason 作为错误结果返给主 agent；不命中则放行。审核结果一律追加 ~/.pi/agent/jev-comp/audit.jsonl。
+// fail-open：JEV 出错、配置档（~/.pi/agent/jev-comp/compliance-rules.json）出错、任何异常皆放行。
 // key 由 jev/client.ts 默认链自取（进程环境 JEV_AI_API_KEY），本文件不含任何 key。
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendFileSync } from "node:fs";
@@ -9,8 +9,8 @@ import os from "node:os";
 import pathMod from "node:path";
 import { checkDispatch, loadRuleSets } from "../jev/compliance.ts";
 
-const AUDIT_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev", "audit.jsonl");
-const RULES_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev", "compliance-rules.json");
+const AUDIT_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "audit.jsonl");
+const RULES_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "compliance-rules.json");
 
 export default function (pi: ExtensionAPI) {
   const ruleSets = loadRuleSets(RULES_PATH);

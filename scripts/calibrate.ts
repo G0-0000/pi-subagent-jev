@@ -1,6 +1,6 @@
 // JEV API 校准：六个 delegate 派发样本验 R1–R4 判题准头。
 // 每 case 一次请求打包四问（noul，0–1 概率）；顺序执行；错误不重试。
-// 跑法：set -a; . ~/.config/jev/env; set +a; node scripts/calibrate.ts
+// 跑法：set -a; . ~/.config/jev-comp/env; set +a; node scripts/calibrate.ts
 import { appendFileSync, mkdirSync } from "node:fs";
 import { ask, JevError, type SystemOneResult } from "../jev/client.ts";
 

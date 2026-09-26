@@ -53,8 +53,8 @@ pi-subagent-jev/
 
 ## 配置与运行时
 
-- 规则配置表生效档：`~/.pi/agent/jev/compliance-rules.json`（仓库内 `examples/compliance-rules.sample.json` 为样例；**改默认阈值时两边同步**——`jev/compliance.ts` 内建 `RULE_SETS` 与样例 JSON）。
-- 审计日志：`~/.pi/agent/jev/audit.jsonl`（每次求值一行，含 `blocked` 字段）。
+- 规则配置表生效档：`~/.pi/agent/jev-comp/compliance-rules.json`（仓库内 `examples/compliance-rules.sample.json` 为样例；**改默认阈值时两边同步**——`jev/compliance.ts` 内建 `RULE_SETS` 与样例 JSON）。
+- 审计日志：`~/.pi/agent/jev-comp/audit.jsonl`（每次求值一行，含 `blocked` 字段）。
 - 二者皆**运行时数据，不入库**（仓库存样例与代码，不存实际配置与审计留痕）。
 
 ## 部署

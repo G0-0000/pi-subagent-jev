@@ -95,13 +95,13 @@ function resolveConfig(cfg: JevConfig = {}): ResolvedConfig {
     apiKey = process.env.JEV_AI_API_KEY;
   } else {
     const envFilePath =
-      cfg.envFile ?? process.env.JEV_AI_ENV_FILE ?? pathMod.join(os.homedir(), ".config", "jev", "env");
+      cfg.envFile ?? process.env.JEV_AI_ENV_FILE ?? pathMod.join(os.homedir(), ".config", "jev-comp", "env");
     apiKey = readEnvFile(envFilePath).JEV_AI_API_KEY || "";
   }
   if (!apiKey) {
     throw new JevError(
       "not_configured",
-      "JEV API key 未配置（解析序：显式参数 apiKey → 环境变量 JEV_AI_API_KEY → env 档 JEV_AI_ENV_FILE/~/.config/jev/env，均未得）"
+      "JEV API key 未配置（解析序：显式参数 apiKey → 环境变量 JEV_AI_API_KEY → env 档 JEV_AI_ENV_FILE/~/.config/jev-comp/env，均未得）"
     );
   }
   const baseUrl = (

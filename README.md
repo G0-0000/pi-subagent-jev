@@ -30,7 +30,7 @@ pi install ./pi-subagent-jev
 
 ## Configuration
 
-Compliance rules live in `~/.pi/agent/jev/compliance-rules.json`. See [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json):
+Compliance rules live in `~/.pi/agent/jev-comp/compliance-rules.json`. See [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json):
 
 ```json
 {
@@ -48,7 +48,7 @@ Each rule has an id, a `blockWhen` (`below` / `above`), a `threshold` (0–1 pro
 
 ## Audit log
 
-Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev/audit.jsonl` (one JSON object per line, including a `blocked` field).
+Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp/audit.jsonl` (one JSON object per line, including a `blocked` field).
 
 ## Fail-open
 
@@ -70,4 +70,4 @@ MIT
 
 ## 中文简介
 
-pi-subagent-jev 是一个 pi 扩展包，含两个扩展：`jev-compliance` 在主 agent 派发 subagent 任务时，把任务文本交 JEV System One 决策模型求值，命中违规规则（如任务未给文件路径、要求无权限的 shell 操作）即拦截派单，违规原因逐条返给主 agent；`jev` 提供 `jev_ask` / `jev_models` 工具直接查询该决策模型。规则配置于 `~/.pi/agent/jev/compliance-rules.json`，全部审核记录写入 `~/.pi/agent/jev/audit.jsonl`；端点不可达或配置出错时一律放行（fail-open）。
+pi-subagent-jev 是一个 pi 扩展包，含两个扩展：`jev-compliance` 在主 agent 派发 subagent 任务时，把任务文本交 JEV System One 决策模型求值，命中违规规则（如任务未给文件路径、要求无权限的 shell 操作）即拦截派单，违规原因逐条返给主 agent；`jev` 提供 `jev_ask` / `jev_models` 工具直接查询该决策模型。规则配置于 `~/.pi/agent/jev-comp/compliance-rules.json`，全部审核记录写入 `~/.pi/agent/jev-comp/audit.jsonl`；端点不可达或配置出错时一律放行（fail-open）。

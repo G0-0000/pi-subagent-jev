@@ -17,7 +17,7 @@ JEV System One 决策模型客户端（9router 本地端点）。零 npm 依赖�
 
 ## 配置
 
-`~/.config/jev/env`（600）：
+`~/.config/jev-comp/env`（600）：
 
 ```
 export JEV_AI_API_KEY=sk-...   # 9router key，勿回显
@@ -26,14 +26,14 @@ export JEV_AI_API_KEY=sk-...   # 9router key，勿回显
 `~/.bashrc` 末尾已加：
 
 ```
-[ -f ~/.config/jev/env ] && . ~/.config/jev/env
+[ -f ~/.config/jev-comp/env ] && . ~/.config/jev-comp/env
 ```
 
 环境变量：`JEV_AI_API_KEY`（9router 需认证；三处均未得 key 即报 not_configured，见下节）、`JEV_AI_BASE_URL`（默认如上）、`JEV_AI_PROXY`（默认**不用代理**；显式给值方用，localhost URL 仍免代理）。
 
 ## key 解析序
 
-显式参数 `apiKey` > 环境变量 `JEV_AI_API_KEY` > env 档（路径：显式参数 `envFile` > `JEV_AI_ENV_FILE` > 默认 `~/.config/jev/env`；识 `export KEY=VALUE` 与 `KEY=VALUE`，去引号，进程内缓存）。全部落空 → `JevError` kind `not_configured`；key 之值绝不出现在任何错误消息、日志或返回文本。
+显式参数 `apiKey` > 环境变量 `JEV_AI_API_KEY` > env 档（路径：显式参数 `envFile` > `JEV_AI_ENV_FILE` > 默认 `~/.config/jev-comp/env`；识 `export KEY=VALUE` 与 `KEY=VALUE`，去引号，进程内缓存）。全部落空 → `JevError` kind `not_configured`；key 之值绝不出现在任何错误消息、日志或返回文本。
 
 ## 测试
 
