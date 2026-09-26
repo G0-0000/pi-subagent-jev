@@ -4,10 +4,10 @@
 
 ## 项目概述
 
-pi package（名 **pi-subagent-jev**），含二扩展：
+pi package（名 **pi-subagent-jev**），单扩展 **`extensions/pi-subagent-jev.ts`**（含 `jev_ask`/`jev_models` 工具 ＋ 派单拦截）：
 
-- **`extensions/jev-compliance.ts`** — subagent 派单合规**拦截**：钩 pi 的 `tool_call` 事件，对命中规则集的 subagent 派单把任务原文打包为 state，向 JEV System One 一次性求值；命中规则即返回 `{ block: true, reason }`，reason 逐条列违规消息（形如 `R1: 任务未给出具体文件路径`）返给主 agent，subagent 不被派生。
-- **`extensions/jev.ts`** — 通用工具扩展：`jev_ask`（对 state 文本求值一批类型化问题：`noul` / `choice` / `score`）与 `jev_models`（列端点已连模型）。
+- **派单拦截** — subagent 派单合规**拦截**：钩 pi 的 `tool_call` 事件，对命中规则集的 subagent 派单把任务原文打包为 state，向 JEV System One 一次性求值；命中规则即返回 `{ block: true, reason }`，reason 逐条列违规消息（形如 `R1: 任务未给出具体文件路径`）返给主 agent，subagent 不被派生。
+- **通用工具** — `jev_ask`（对 state 文本求值一批类型化问题：`noul` / `choice` / `score`）与 `jev_models`（列端点已连模型）。
 
 逻辑层在 `jev/`：
 
@@ -19,8 +19,7 @@ pi package（名 **pi-subagent-jev**），含二扩展：
 ```
 pi-subagent-jev/
 ├── extensions/
-│   ├── jev-compliance.ts      # 派单拦截扩展
-│   └── jev.ts                 # jev_ask / jev_models 工具扩展
+│   ├── pi-subagent-jev.ts     # 单扩展：jev_ask / jev_models 工具 ＋ 派单拦截
 ├── jev/
 │   ├── client.ts              # API 传输层（curl、错误映射、key 解析）
 │   ├── client.test.ts

@@ -1,6 +1,6 @@
 # JEV 派发合规审计插件（2026-09-25 新建）
 
-> ⚠️ 此档撰于拦截式改造前（2026-09-25），所述「只记录不阻断」与 ~/.pi/agent 路径已过时；现状以 AGENTS.md 与源码为准。
+> ⚠️ 此档撰于拦截式改造前（2026-09-25），所述「只记录不阻断」与 ~/.pi/agent 路径已过时；现状以 AGENTS.md 与源码为准。扩展二档已合为 extensions/pi-subagent-jev.ts。
 
 > 专题档。以 JEV System One 决策模型对 pi 的 subagent 派单做**合规审计**：观察 `tool_call` 事件，命中规则集的派单打包四问一次性求值，判定落 JSONL，只记录、不阻断（审计模态）。
 > 红线三条贯穿全文：**key 绝不入档/入日志/入错误文本**；**POST 不自动重试**；**任何错误 fail-open**。
@@ -13,8 +13,7 @@
 |---|---|---|
 | 客户端 | `~/.pi/agent/jev-comp/client.ts` | 9router 端点传输（零 npm 依赖、curl）、错误映射、key 解析 |
 | 纯逻辑 | `~/.pi/agent/jev-comp/compliance.ts` | 规则集、state 拼装、阈值矩阵、verdict、审计行构造（可测、不触 IO） |
-| 工具扩展 | `~/.pi/agent/extensions/jev.ts` | 注册 `jev_ask` / `jev_models` 两工具，供手工调用 |
-| 审计插件 | `~/.pi/agent/extensions/jev-compliance.ts` | 钩 pi 扩展 `tool_call` 事件观察 subagent 派发，fire-and-forget 审计并落档 |
+| 扩展（已合为单档） | `~/pi-subagent-jev/extensions/pi-subagent-jev.ts` | 注册 `jev_ask` / `jev_models` 两工具 ＋ 钩 `tool_call` 拦截 subagent 派单并落 audit |
 | 配置 | `~/.config/jev-comp/env`（600）＋ `~/.bashrc` 末行 source | key 落盘回退，pi 任意启动方式皆得钥 |
 | 校准/产物 | `~/.pi/agent/jev-comp/scripts/calibrate.ts`、`calibration-20260925.jsonl`、`audit.jsonl` | 阈值校准脚本与判定留痕 |
 

@@ -8,7 +8,7 @@
     "test": "node --test jev/*.test.ts"
   },
   "pi": {
-    "extensions": ["./extensions/jev.ts", "./extensions/jev-compliance.ts"]
+    "extensions": ["./extensions/pi-subagent-jev.ts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

@@ -4,10 +4,10 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) package that gates sub
 
 ## What's inside
 
-Two pi extensions:
+One pi extension (`extensions/pi-subagent-jev.ts`), containing:
 
-- **`jev-compliance`** — subagent dispatch compliance gate. Hooks the `tool_call` event for `subagent` invocations, sends the task text to the JEV System One endpoint for evaluation, and blocks the dispatch if any configured rule fires. The block reason lists every violation message and is returned to the main agent as an error result, so the subagent is never spawned.
-- **`jev`** — thin tools over the JEV client: `jev_ask` (evaluate a batch of typed questions — `noul` / `choice` / `score` — against a state text) and `jev_models` (list connected models on the endpoint).
+- **dispatch compliance gate** — subagent dispatch compliance gate. Hooks the `tool_call` event for `subagent` invocations, sends the task text to the JEV System One endpoint for evaluation, and blocks the dispatch if any configured rule fires. The block reason lists every violation message and is returned to the main agent as an error result, so the subagent is never spawned.
+- **thin tools** over the JEV client: `jev_ask` (evaluate a batch of typed questions — `noul` / `choice` / `score` — against a state text) and `jev_models` (list connected models on the endpoint).
 
 ## Requirements
 
@@ -70,4 +70,4 @@ MIT
 
 ## 中文简介
 
-pi-subagent-jev 是一个 pi 扩展包，含两个扩展：`jev-compliance` 在主 agent 派发 subagent 任务时，把任务文本交 JEV System One 决策模型求值，命中违规规则（如任务未给文件路径、要求无权限的 shell 操作）即拦截派单，违规原因逐条返给主 agent；`jev` 提供 `jev_ask` / `jev_models` 工具直接查询该决策模型。规则配置于 `~/.pi/agent/jev-comp/compliance-rules.json`，全部审核记录写入 `~/.pi/agent/jev-comp/audit.jsonl`；端点不可达或配置出错时一律放行（fail-open）。
+pi-subagent-jev 是一个 pi 扩展包，含单扩展 `extensions/pi-subagent-jev.ts`（含 `jev_ask`/`jev_models` 工具 ＋ 派单拦截）：派单拦截在主 agent 派发 subagent 任务时，把任务文本交 JEV System One 决策模型求值，命中违规规则（如任务未给文件路径、要求无权限的 shell 操作）即拦截派单，违规原因逐条返给主 agent；`jev_ask` / `jev_models` 工具直接查询该决策模型。规则配置于 `~/.pi/agent/jev-comp/compliance-rules.json`，全部审核记录写入 `~/.pi/agent/jev-comp/audit.jsonl`；端点不可达或配置出错时一律放行（fail-open）。
