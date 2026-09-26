@@ -21,7 +21,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 1. 遣 scout 查 `~/.config/jev-comp/env` 之**键名**（唯查 `JEV_AI_API_KEY`/`JEV_AI_BASE_URL`/`JEV_AI_MODEL` 三键之有无，**绝不读值**）及进程 env 同名变量之有无。
 2. 缺 `JEV_AI_BASE_URL` 或 `JEV_AI_MODEL` → 询问用户后遣 delegate 以 `KEY=VALUE` 行写入该 env 档（档权限须 600）。
 3. 缺 `JEV_AI_API_KEY` → **嘱用户亲笔自填**，agent 全程不经手其值。
-4. 三键俱齐 → 本次有键新写入/修改者，以 `jev_models` 试连通一次（列得模型即端点与 key 俱通；报错则先排查配置，勿续）；三键本已俱齐则免试径续。
+4. 三键俱齐 → 本次有键新写入/修改者，以一记最小 `jev_ask` 试之（state 一句琐文如「测试」，questions 一记 noul 如 `{probe: {type:"noul", instructions:"Is this a test?"}}`，model 用所配之值或缺省走解析链）：返得概率即端点、key、模型三俱通；报错则先排查配置，勿续。三键本已俱齐则免试径续。
 5. 连通无碍 → 报现状，问用户：「为哪几个 subagent 定规则？」
 6. 可以 `jev_models` 列端点已连模型，供用户拣选 model id。
 
