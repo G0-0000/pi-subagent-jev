@@ -27,7 +27,7 @@ export default function (pi: ExtensionAPI) {
       questions: Type.Record(Type.String(), Type.Unknown(), {
         description: "问题 map，key 自取；每题为 {type:'noul'|'choice'|'score', instructions, ...}",
       }),
-      model: Type.Optional(Type.String({ description: "模型 ID，默认 jev-latest" })),
+      model: Type.Optional(Type.String({ description: "模型 ID，默认 oc/jev-1.13-free" })),
     }),
     async execute(_id, params) {
       try {
