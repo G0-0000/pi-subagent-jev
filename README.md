@@ -52,6 +52,22 @@ Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp
 
 Say "配置 subagent 规则" (or ask to record JEV endpoint/model settings). The skill checks which of the three env keys exist — **without ever reading their values** — asks you for what is missing, and writes the env file / rules file for you.
 
+### Orchestrator main-session extension (opt-in)
+
+The package also ships a second extension, `orchestrator-main`, which governs the main agent session rather than dispatches. It is **disabled by default** and activates only when `~/.pi/agent/jev-comp/orchestrator.json` exists and parses — the file's presence is the on/off switch. All keys are optional:
+
+```json
+{
+  "personaFile": "~/.config/pi-orchestrator/persona.md",
+  "blockedTools": ["bash", "find", "grep", "rg", "ls", "bash_output", "kill", "web_search", "web_fetch", "research_checkpoint", "gbrain_search", "gbrain_capture"],
+  "ceiling": { "denyExtensions": false }
+}
+```
+
+When enabled it does three things: injects the persona file's body (frontmatter stripped, wrapped in `<orchestrator_role>`) into the system prompt; trims and blocks the listed direct-execution tools for the main agent (the `subagent` tool is deliberately never blocked); and registers a capability-ceiling exemption so subagents run with full power. A missing `personaFile` skips only the injection step; a missing or malformed config file disables the whole extension silently (fail-open). Subagent child sessions (`PI_SUBAGENT_CHILD=1`) never get any of these hooks.
+
+> Note: the ceiling exemption resolves `pi-subagents` from the host pi installation (`~/.pi/agent/npm`) via a fallback chain — packages load with separate module roots, and the ceiling registry lives in the host's own pi-subagents instance, so bundling the dependency inside this package would register into the wrong instance.
+
 ## Fail-open
 
 If the JEV endpoint is unreachable or not configured, the API key is missing, or the rules file is malformed, dispatches are **allowed through**. The gate never blocks on its own failure.
@@ -123,6 +139,22 @@ JEV_AI_MODEL=可选之模型覆盖
 #### Skill
 
 言「配置 subagent 规则」（或请录 JEV 端点/模型设置）。skill 查三键之有无——**绝不读其值**——问你所缺，代写 env 档与规则档。
+
+#### Orchestrator 主会话扩展（opt-in）
+
+包内另附第二扩展 `orchestrator-main`，所治为主 agent 会话而非派单。**默认不开**——唯 `~/.pi/agent/jev-comp/orchestrator.json` 存在且可解析方启用，档之有无即启停之关。诸键皆可选：
+
+```json
+{
+  "personaFile": "~/.config/pi-orchestrator/persona.md",
+  "blockedTools": ["bash", "find", "grep", "rg", "ls", "bash_output", "kill", "web_search", "web_fetch", "research_checkpoint", "gbrain_search", "gbrain_capture"],
+  "ceiling": { "denyExtensions": false }
+}
+```
+
+启用后行三事：注入 persona 档正文（剥 frontmatter，以 `<orchestrator_role>` 包裹）于系统提示；按清单裁剪并拦截主 agent 之直执行工具（独不拦 `subagent`）；注册子 agent 豁免（capability-ceiling），使子 agent 得全量能力。`personaFile` 所指档不存在时，唯注入一步静默跳过；配置档缺失或损坏则本扩展静默全不启用（fail-open）。子 agent 进程（`PI_SUBAGENT_CHILD=1`）一钩不注。
+
+> 注：ceiling 豁免经 fallback 链自宿主 pi 安装处（`~/.pi/agent/npm`）解析 `pi-subagents`——包之模块根各自隔离，而注册表存于宿主实例；若将依赖打入本包，徒注册于自家实例，宿主读不到。
 
 ### Fail-open
 

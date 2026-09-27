@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-pi package（名 **pi-subagent-jev**），单扩展 **`extensions/pi-subagent-jev.ts`**（含 `jev_ask`/`jev_models` 工具 ＋ 派单拦截）：
+pi package（名 **pi-subagent-jev**），扩展二枚：**`extensions/pi-subagent-jev.ts`**（`jev_ask`/`jev_models` 工具 ＋ 派单拦截）与 **`extensions/orchestrator-main.ts`**（opt-in 主会话治理，见下节）：
 - **派单拦截** — subagent 派单合规**拦截**：钩 pi 的 `tool_call` 事件，对命中规则集的 subagent 派单把任务原文打包为 state，向 JEV System One 一次性求值；命中规则即返回 `{ block: true, reason }`，reason 格式为：
   `派单审核未通过（agent=<名>）：` 首行，随后每条违规一行、以 `- ` 前缀（形如 `- R1: 任务未给出具体文件路径`），末行固定 `请修正任务描述后重派。`；整个 reason 作为错误结果返给主 agent，subagent 不被派生。
 - **通用工具** — `jev_ask`（对 state 文本求值一批类型化问题：`noul` / `choice` / `score`）与 `jev_models`（列端点已连模型）。
@@ -18,7 +18,8 @@ pi package（名 **pi-subagent-jev**），单扩展 **`extensions/pi-subagent-je
 ```
 pi-subagent-jev/
 ├── extensions/
-│   └── pi-subagent-jev.ts     # 单扩展：jev_ask / jev_models 工具 ＋ 派单拦截
+│   ├── pi-subagent-jev.ts     # 扩展一：jev_ask / jev_models 工具 ＋ 派单拦截
+│   └── orchestrator-main.ts   # 扩展二（opt-in）：主会话 persona 注入＋直执行工具裁剪＋子 agent 豁免
 ├── jev/
 │   ├── client.ts              # API 传输层（curl、错误映射、key 解析）
 │   ├── client.test.ts
@@ -37,6 +38,10 @@ pi-subagent-jev/
 ├── package.json
 └── .gitignore
 ```
+
+## orchestrator-main 扩展（opt-in）
+
+第二扩展，治主 agent 会话而非派单，与派单拦截之 `tool_call` 面不相交（彼唯拦 `subagent`）。**默认全不启用**——唯 `~/.pi/agent/jev-comp/orchestrator.json` 存在且可解析方启用（档之有无即启停；坏档静默不启用，fail-open）。三键皆可选：`personaFile`（persona 档路径，默认 `~/.config/pi-orchestrator/persona.md`；所指档不存在则唯注入一步静默跳过）、`blockedTools`（裁剪拦截清单，默认内建十二项，独不拦 `subagent`）、`ceiling`（默认 `{denyExtensions:false}`，经 `pi-subagents/capability-ceiling` 惰性注册子 agent 豁免）。主/子判别唯 `PI_SUBAGENT_CHILD === "1"`。capability-ceiling 之加载经 fallback 链（先直 import，败则以宿主 npm 目录 `~/.pi/agent/npm` 为基准 createRequire 解析）——包模块根隔离，注册表须取宿主实例故。运行时配置与审计皆不入库，与 jev 同例。
 
 ## 红线三条（贯穿一切改动）
 1. **key 绝不入档/入日志/入错误文本** — `JEV_AI_API_KEY` 之值不得出现在任何文件、日志、错误消息或返回文本中
