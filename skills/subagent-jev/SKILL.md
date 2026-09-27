@@ -32,22 +32,24 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - 正例（可执行性要素：对象/方案/内容）→ `blockWhen: "below"`，默认阈 0.7
 - 反例（越权/破坏/误导措辞）→ `blockWhen: "above"`，默认阈 0.8
 - `instructions` 用英文问句（答为 0–1 概率）；`message` 用中文短语
+- `criteria` 可选：`true`/`false` 各一句英文判据，划清答支边界；问句含糊、裸问置信度飘忽或贴线时加之（实测可移概率 0.4–0.7）
 - 规则 id 任意字符串，建议系以前缀字母（如 worker 用 W 系）
 - **先呈中文对照表（id/向性/问句中译/阈值/拦截文案）候用户首肯**，再动下一步
 
 ## 第三步 · 测规则
 以 `jev_ask` 直测 ≥5 个假想任务（1 个合规好任务 ＋ 每反例至少 1 个坏任务）：
 - state 形如：`Agent: <名> — <agentDesc>` 换行换行 `Task:` 换行 `<假想任务>`
-- questions 即各规则之 noul 问句（键用规则 id）
+- questions 即各规则之 noul 问句（键用规则 id）（规则配有 criteria 则一并带上）
 - 验：好任务全过、坏任务各中其罪；贴线未中者（差 ≤0.05）调阈复测
 
 ## 第四步 · 写配置
 遣 delegate 将规则组并入 `~/.pi/agent/jev-comp/compliance-rules.json`（顶层键＝agent 名；`_global` 为保留键勿动）。写前先读档，核对既有各组不被破坏。告用户 `/reload` 生效。
 
 ## 配置档 schema 速查
-顶层键即 agent 名，下书 `agentDesc` 与 `rules` 数组；规则五字段：`id`/`instructions`/`blockWhen`/`threshold`/`message`。`_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`。
+顶层键即 agent 名，下书 `agentDesc` 与 `rules` 数组；规则字段：`id`/`instructions`/`blockWhen`/`threshold`/`message`，另可选 `criteria`（`{true, false}` 答支判据，直透 JEV 以消歧）。`_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`。
 - below：概率 < 阈值则拦（正例，求达标有据）；above：概率 > 阈值则拦（反例，求犯忌有凭）
 - 拦截文案之首尾（「派单审核未通过…」/「请修正任务描述后重派。」）硬编码于扩展，唯 message 可配
 
 ## 校准经验
 实测贴线（如 0.77 vs 阈 0.8）即降阈 0.1 复测；好任务之反例值得分常 ≤0.4，降至 0.7 误伤甚微（worker 之 W6 前例：0.8 漏拦「顺带一句」，降 0.7 后 0.77 正入彀中）。
+问句含糊而裸问得分虚高者，加 criteria 划定答支边界有奇效（实测「登录那块有无锚点」裸问 0.76 → 加 criteria 坠至 0.06）；唯 criteria 乃强先验非铁律，不能逆转问句本义（如 "critical" 之类强词仍掣肘）。

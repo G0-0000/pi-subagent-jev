@@ -39,7 +39,7 @@ Rather not edit files by hand? Just ask pi to 配置 subagent 规则 — the bun
 
 Nothing to do — once installed and configured, every subagent dispatch is evaluated automatically. A blocked dispatch returns the violation list to the main agent.
 
-Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (full sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, `instructions` (the question asked of JEV), a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability), and a `message` (returned on violation). Rules are keyed by subagent name; only dispatches to a named agent are evaluated. After editing, `/reload` in pi.
+Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (full sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, `instructions` (the question asked of JEV), an optional `criteria` (`{true, false}` natural-language answer-branch guides passed through to JEV to disambiguate borderline questions), a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability), and a `message` (returned on violation). Rules are keyed by subagent name; only dispatches to a named agent are evaluated. After editing, `/reload` in pi.
 
 Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp/audit.jsonl` (one JSON object per line; a `blocked` array appears only when the dispatch was blocked).
 
@@ -111,7 +111,7 @@ JEV_AI_MODEL=可选之模型覆盖
 
 无需任何操作——装好配妥后，每次派单自动求值。被拦之派单将违规清单返予主 agent。
 
-规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（完整样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`instructions`（交 JEV 之问）、`blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。规则按 subagent 名分组；唯派单至具名 agent 方求值。改后于 pi 内 `/reload`。
+规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（完整样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`instructions`（交 JEV 之问）、可选 `criteria`（`{true, false}` 答支判据，透传 JEV 以消歧含糊之问）、`blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。规则按 subagent 名分组；唯派单至具名 agent 方求值。改后于 pi 内 `/reload`。
 
 每次求值——放行或拦截——皆追加于 `~/.pi/agent/jev-comp/audit.jsonl`（每行一 JSON 对象；唯拦截时含 `blocked` 数组）。
 

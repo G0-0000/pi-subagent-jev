@@ -39,6 +39,10 @@
       {
         "id": "C1",
         "instructions": "Does the task ask the agent to change public API signatures or break backwards compatibility?",
+        "criteria": {
+          "true": "The task requires renaming, removing, or changing the signature of a public API, or changing behavior that existing callers depend on",
+          "false": "The task only adds new code or changes internal implementation without affecting public APIs or observable behavior"
+        },
         "blockWhen": "above",
         "threshold": 0.6,
         "message": "任务可能破坏向后兼容，需人工确认"

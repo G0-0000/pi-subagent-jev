@@ -308,6 +308,63 @@ test("⑰ checkDispatch auditProbabilities：true → line.probs 含原始数值
   assert.ok(!("probs" in off!.line));
 });
 
+test("⑲ loadRuleSets：criteria 覆盖、prev 兜底与非法静默弃", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const p = path.join(dir, "rules.json");
+  writeFileSync(
+    p,
+    JSON.stringify({
+      delegate: {
+        rules: [
+          { id: "R1", criteria: { true: "has path", false: "no path" } },
+          { id: "R2", criteria: "not-an-object" },
+          { id: "R9", criteria: { true: "only true side" } },
+        ],
+      },
+    })
+  );
+  const rs = loadRuleSets(p);
+  const r1 = rs.agents.delegate.rules.find((r) => r.id === "R1")!;
+  assert.deepEqual(r1.criteria, { true: "has path", false: "no path" }); // 配置档 criteria 覆盖
+  const r2 = rs.agents.delegate.rules.find((r) => r.id === "R2")!;
+  assert.equal(r2.criteria, undefined); // 内建无 criteria，且非法值静默弃之 → 仍无
+  const r9 = rs.agents.delegate.rules.find((r) => r.id === "R9")!;
+  assert.deepEqual(r9.criteria, { true: "only true side" }); // 单边判据原样保留
+  // 内建未被就地改动
+  assert.equal(RULE_SETS.delegate.rules.find((r) => r.id === "R1")!.criteria, undefined);
+});
+
+test("⑳ checkDispatch：配置档 criteria 一路透传至 askFn 载荷", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const p = path.join(dir, "rules.json");
+  writeFileSync(
+    p,
+    JSON.stringify({
+      delegate: {
+        rules: [{ id: "R1", criteria: { true: "t", false: "f" } }],
+      },
+    })
+  );
+  const rs = loadRuleSets(p);
+  let asked = 0;
+  let qs: Record<string, any> = {};
+  const askFn: AskFn = async (params) => {
+    asked++;
+    qs = params.questions as Record<string, any>;
+    return {
+      model: "m",
+      answers: Object.fromEntries(Object.keys(params.questions).map((k) => [k, { noul: 0.99 }])),
+      usage: {},
+    };
+  };
+  const res = await checkDispatch("delegate", TASK, { askFn, ruleSets: rs.agents });
+  assert.equal(asked, 1);
+  assert.ok(res);
+  assert.deepEqual(qs.R1.criteria, { true: "t", false: "f" }); // criteria 透传至载荷
+  assert.equal(qs.R2.criteria, undefined); // 未配 criteria 之规则不带该键
+  assert.ok(!("criteria" in qs.R2));
+});
+
 test("⑱ checkDispatch：instructions 为空/空白的规则检查时跳过，不发问不拦", async () => {
   const ruleSets = {
     worker: {

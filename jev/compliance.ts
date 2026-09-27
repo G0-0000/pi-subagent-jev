@@ -14,6 +14,8 @@ export type RuleId = string;
 export type RuleConfig = {
   id: RuleId;
   instructions: string;
+  /** 答支判据（可选）：true/false 各一句自然语言，划清答支边界以消歧；有则透传 JEV */
+  criteria?: { true?: string; false?: string };
   /** 拦截方向："below"=p 低于阈值即拦（正例规则）；"above"=p 高于阈值即拦（反例规则） */
   blockWhen: "below" | "above";
   threshold: number; // 0..1
@@ -152,6 +154,7 @@ export function auditLine(fields: AuditLineFields): AuditLine {
 type RawRule = {
   id?: unknown;
   instructions?: unknown;
+  criteria?: unknown;
   blockWhen?: unknown;
   threshold?: unknown;
   message?: unknown;
@@ -167,6 +170,16 @@ export type LoadedRules = {
 
 /** 配置档顶层保留键：全局开关，不视作 agent 名。 */
 const GLOBAL_KEY = "_global";
+
+/** 配置档 criteria 之解析：唯取 true/false 两字符串字段；非法者静默弃之（fail-open），绝不阻断 */
+function parseCriteria(v: unknown): { true?: string; false?: string } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const c: { true?: string; false?: string } = {};
+  if (typeof o.true === "string") c.true = o.true;
+  if (typeof o.false === "string") c.false = o.false;
+  return Object.keys(c).length > 0 ? c : undefined;
+}
 
 /**
  * 读配置档并按 agent→rule id 合并覆盖内建 RULE_SETS：
@@ -214,6 +227,7 @@ export function loadRuleSets(path: string): LoadedRules {
         id,
         instructions:
           typeof item.instructions === "string" ? item.instructions : prev?.instructions ?? "",
+        criteria: parseCriteria(item.criteria) ?? prev?.criteria,
         blockWhen:
           item.blockWhen === "below" || item.blockWhen === "above"
             ? item.blockWhen
@@ -267,7 +281,14 @@ export async function checkDispatch(
   const start = Date.now();
   try {
     const questions = Object.fromEntries(
-      rules.map((r) => [r.id, { type: "noul" as const, instructions: r.instructions }])
+      rules.map((r) => [
+        r.id,
+        {
+          type: "noul" as const,
+          instructions: r.instructions,
+          ...(r.criteria ? { criteria: r.criteria } : {}),
+        },
+      ])
     );
     const res = await askFn({
       state: buildState(agent, rs.agentDesc, task),
