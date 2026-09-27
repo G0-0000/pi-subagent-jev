@@ -29,6 +29,11 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 遣 scout 取 `~/.pi/agent/npm/node_modules/pi-subagents/agents/<agent>.md`，析其：职能、工具白名单（有无 bash）、行为契约（如「方向不自决」）、禁忌。注意别名（worker 有别名 developer/coder/implementer/develop）——配置以派单之名为键，约定只用正名。
 
 ## 第二步 · 定规则
+- **立则三纲**（2026-09-27 librarian 组实践定论）：
+  1. **能复用则复用**——跨 agent 同义之条（标的/决策/措辞之类）当逐字同文，优化时各组同步改；唯「改动/越权」之条因各 agent 工具白名单与写面各异不可强求（scout S2 原样套 librarian，「回写大脑」虚高 .91 误拦之鉴）。**复用前必以对方组测例互验，两侧全中方同文**；现成同文模板：标的条见 scout S1、决策条见 scout S3、措辞条见 worker W6
+  2. **能拆则拆**——一条规则唯问一事（标的、改动、决策、措辞各为一问），勿揉「任务合规与否」之大问；拆细则罪名单明、拦截文案知所中、阈值可分调
+  3. **问句从简，criteria 详述**——instructions 唯朴素一问（如 "Does the task name a concrete question or topic to investigate?"），答支边界、豁免清单、误判场景皆挪 criteria 双支详陈
+
 - 正例（可执行性要素：对象/方案/内容）→ `blockWhen: "below"`，默认阈 0.7
 - 反例（越权/破坏/误导措辞）→ `blockWhen: "above"`，默认阈 0.8
 - `instructions` 用英文问句（答为 0–1 概率）；`message` 用中文短语
