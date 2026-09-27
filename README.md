@@ -39,9 +39,13 @@ Rather not edit files by hand? Just ask pi to 配置 subagent 规则 — the bun
 
 Nothing to do — once installed and configured, every subagent dispatch is evaluated automatically. A blocked dispatch returns the violation list to the main agent.
 
-Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (full sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, `instructions` (the question asked of JEV), an optional `criteria` (`{true, false}` natural-language answer-branch guides passed through to JEV to disambiguate borderline questions), a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability), and a `message` (returned on violation). Rules are keyed by subagent name; only dispatches to a named agent are evaluated. After editing, `/reload` in pi.
+Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (full sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, `instructions` (the question asked of JEV), an optional `criteria` (`{true, false}` natural-language answer-branch guides passed through to JEV to disambiguate borderline questions), a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability), and a `message` (returned on violation). Rules are keyed by subagent name; only dispatches to a named agent are evaluated. A reserved top-level key `_global` holds global switches (e.g. `{ "auditProbabilities": true }`) and is not treated as an agent name. After editing, `/reload` in pi.
 
-Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp/audit.jsonl` (one JSON object per line; a `blocked` array appears only when the dispatch was blocked).
+Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp/audit.jsonl` (one JSON object per line).
+
+#### Audit fields
+
+Every audit line carries the constant fields `ts`, `agent`, `task_excerpt` (task truncated to 200 characters), `model`, `rules` and `verdict`, plus `latency_ms`. Conditionally: `blocked` (array of violating rule messages — only when the dispatch was blocked), `error` (fail-open error description), `probs` (rule id → raw probability, only when `_global.auditProbabilities` is `true`), and `upstream` + `failover` (only when a non-first configured upstream answered — a real switch or a cooldown skip; `failover` records carry `status` / `kind` / `ms` for failed attempts and `retryAfterMs` when a 429 reported `Retry-After`, while skipped levels are recorded as `{name, kind: "cooldown"}` with no `status`/`ms`). Rows where the whole chain failed carry the `failover` attempts alongside `error`, without `upstream`. API keys are never logged.
 
 ### Tools
 
@@ -70,7 +74,9 @@ When enabled it does three things: injects the persona file's body (frontmatter 
 
 ## Multi-upstream failover (optional)
 
-Create `~/.pi/agent/jev-comp/upstreams.json` (permissions 600; copy from [examples/upstreams.sample.json](examples/upstreams.sample.json)) to list ordered upstreams. `ask()` tries them in order — one request per upstream, never retrying the same one; connection errors, timeouts, 5xx, 429, 401, 403, 404 and unusable bodies switch to the next upstream, while 402/422/3xx fail immediately. Recently-dead connection-level upstreams are skipped in-process for `cooldownMs` (default 30s, memory only). If the file is absent or invalid, or the whole chain fails, behavior falls back to the legacy single-upstream path (fail-open). Read once at extension load; run `/reload` after editing. Runtime data — never committed.
+Create `~/.pi/agent/jev-comp/upstreams.json` (permissions 600; copy from [examples/upstreams.sample.json](examples/upstreams.sample.json), which also shows a secondary `typesafe` upstream) to list ordered upstreams. Each entry is `{name, baseUrl, apiKey, model, proxy?}` — `name` must be non-empty and unique; the optional per-level `proxy` overrides it, and when absent the existing `JEV_AI_PROXY` behavior applies. Top-level `timeoutMs` (default 5000 — used as the per-level `curl --max-time`) and `cooldownMs` (default 30000) must be positive integers.
+
+`ask()` tries them in order — one request per upstream, never retrying the same one, never backing off. Switching to the next upstream happens **only** for: connection failure, timeout, HTTP 5xx, 429, 401, 403, 404, and an unusable 200 body. `402`, `422`, all other 4xx (400/405/408/409/…), `3xx`, and `not_configured` throw immediately with zero requests to later upstreams. Only connection-level failures (network / timeout / 5xx) put an upstream into cooldown; 429 and other 4xx never do. During the `cooldownMs` window the level is skipped with zero HTTP requests and recorded in the audit as `{name, kind: "cooldown"}`; once the window expires the level is retried (the cooldown table is in-memory only — a restart forgets it). If the file is absent or invalid, or the whole chain fails, behavior falls back to the legacy single-upstream path (fail-open). Read once at extension load; run `/reload` after editing. Runtime data — never committed. See [CONTEXT.md](CONTEXT.md) for the glossary (Upstream / Failover / Cooldown) and [docs/adr/0001-upstream-failover.md](docs/adr/0001-upstream-failover.md) for the design decision.
 
 ## Fail-open
 
@@ -82,7 +88,7 @@ If the JEV endpoint is unreachable or not configured, the API key is missing, or
 npm test
 ```
 
-Zero npm dependencies; runs on Node's built-in test runner. To recalibrate the judge thresholds, see `scripts/calibrate.ts` (it issues real API requests, so it is not run by the tests).
+Zero npm dependencies; runs on Node's built-in test runner (77 tests). To recalibrate the judge thresholds, see `scripts/calibrate.ts` (it issues real API requests, so it is not run by the tests).
 
 ## License
 
@@ -131,9 +137,13 @@ JEV_AI_MODEL=可选之模型覆盖
 
 无需任何操作——装好配妥后，每次派单自动求值。被拦之派单将违规清单返予主 agent。
 
-规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（完整样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`instructions`（交 JEV 之问）、可选 `criteria`（`{true, false}` 答支判据，透传 JEV 以消歧含糊之问）、`blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。规则按 subagent 名分组；唯派单至具名 agent 方求值。改后于 pi 内 `/reload`。
+规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（完整样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`instructions`（交 JEV 之问）、可选 `criteria`（`{true, false}` 答支判据，透传 JEV 以消歧含糊之问）、`blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。规则按 subagent 名分组；唯派单至具名 agent 方求值。顶层保留键 `_global` 存放全局开关（如 `{ "auditProbabilities": true }`），不视作 agent 名。改后于 pi 内 `/reload`。
 
-每次求值——放行或拦截——皆追加于 `~/.pi/agent/jev-comp/audit.jsonl`（每行一 JSON 对象；唯拦截时含 `blocked` 数组）。
+每次求值——放行或拦截——皆追加于 `~/.pi/agent/jev-comp/audit.jsonl`（每行一 JSON 对象）。
+
+#### 审计字段
+
+审计行恒有字段 `ts`、`agent`、`task_excerpt`（任务原文按码点截 ≤200 字）、`model`、`rules` 与 `verdict`，另有 `latency_ms`。条件性字段：`blocked`（命中拦截之规则文案数组——唯派单被拦时出现）、`error`（fail-open 之错误说明）、`probs`（规则 id → 原始概率，唯 `_global.auditProbabilities` 为 `true` 时附）、以及 `upstream` ＋ `failover`（唯胜者非首配 upstream 时附——真实切换或冷却跳过皆然；`failover` 记录对真实失败尝试携 `status` / `kind` / `ms`，429 上报 `Retry-After` 时另携 `retryAfterMs`，被跳过之级则记 `{name, kind: "cooldown"}`、无 `status`/`ms`）。全链败尽之行携 `failover` 历次尝试与 `error`，无 `upstream`。API key 绝不入日志。
 
 #### 工具
 
@@ -162,7 +172,9 @@ JEV_AI_MODEL=可选之模型覆盖
 
 ### 多上游 failover（可选）
 
-创建 `~/.pi/agent/jev-comp/upstreams.json`（权限 600；样例：[examples/upstreams.sample.json](examples/upstreams.sample.json)）即可列出按序上游。`ask()` 依序尝试——每级恰一发、同一端绝不重发；连接败/超时/5xx/429/401/403/404/坏体切下一级，402/422/3xx 立即失败。连接级败北之端点在进程内冷却 `cooldownMs`（缺省 30s，仅内存）内被跳过。档不存在或非法、或全链败尽，均回旧单端点链路（fail-open）。扩展加载时读一次，改后在 pi 内 `/reload`。运行时数据，不入库。
+创建 `~/.pi/agent/jev-comp/upstreams.json`（权限 600；样例：[examples/upstreams.sample.json](examples/upstreams.sample.json)，内含 `typesafe` 备级示例）即可列出按序上游。每项形 `{name, baseUrl, apiKey, model, proxy?}`——`name` 须非空且唯一；各级可选 `proxy` 覆盖代理，缺省走既有 `JEV_AI_PROXY` 链。顶层 `timeoutMs`（缺省 5000——按级作 `curl --max-time`）与 `cooldownMs`（缺省 30000）须为正整数。
+
+`ask()` 依序尝试——每级恰一发、同一端绝不重发、绝不退避。切换至下一级**仅**发生于：连接败、超时、HTTP 5xx、429、401、403、404 及 200 坏体。`402`、`422`、其余一切 4xx（400/405/408/409/…）、`3xx` 与 `not_configured` 立即抛出，对后续各级零请求。唯连接级败北（network／超时／5xx）会使端点入冷却；429 与其余 4xx 绝不冷却。冷却窗口内该级被跳过——零 HTTP 请求、审计记 `{name, kind: "cooldown"}`；窗口届满即恢复尝试（冷却表仅存内存——重启即忘）。档不存在或非法、或全链败尽，均回旧单端点链路（fail-open）。扩展加载时读一次，改后在 pi 内 `/reload`。运行时数据，不入库。术语表（Upstream / Failover / Cooldown）见 [CONTEXT.md](CONTEXT.md)，设计决策见 [docs/adr/0001-upstream-failover.md](docs/adr/0001-upstream-failover.md)。
 
 ### Fail-open
 
@@ -174,7 +186,7 @@ JEV 端点不可达或未配置、API key 缺失、规则档损坏时，派单�
 npm test
 ```
 
-零 npm 依赖，Node 内建测试器。重校准判定阈值见 `scripts/calibrate.ts`（发真实 API 请求，故不入测试）。
+零 npm 依赖，Node 内建测试器（77 条测试）。重校准判定阈值见 `scripts/calibrate.ts`（发真实 API 请求，故不入测试）。
 
 ### 许可证
 
