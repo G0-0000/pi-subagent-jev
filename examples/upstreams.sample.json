@@ -1,0 +1,8 @@
+{
+  "timeoutMs": 5000,
+  "cooldownMs": 30000,
+  "upstreams": [
+    { "name": "primary", "baseUrl": "https://primary.example.invalid", "apiKey": "YOUR_KEY_HERE", "model": "YOUR_PRIMARY_MODEL" },
+    { "name": "typesafe", "baseUrl": "https://api.typesafe.ai", "apiKey": "YOUR_KEY_HERE", "model": "jev-latest" }
+  ]
+}

@@ -1,10 +1,19 @@
 // JEV API client（端点由 JEV_AI_BASE_URL 配置，无内建默认）。零 npm 依赖，curl 传输。
 // 任何输出 / 错误消息不得包含 API key。env 档（~/.config/jev-comp/env）可配三键：
 // JEV_AI_API_KEY / JEV_AI_BASE_URL / JEV_AI_MODEL（model 仅作用于 ask()）。
+// 多上游 failover：ask() 可携 failover 配置按序切换上游（每级一发、同端绝不重发、
+// 不退避不睡眠；冷却跳过见 jev/failover.ts）。failover 缺席或显式传 baseUrl/apiKey 时行为与旧单端点逐字节一致。
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
+import {
+  classifyFailure,
+  defaultCooldownTracker,
+  type AttemptRecord,
+  type CooldownTracker,
+  type FailoverConfig,
+} from "./failover.ts";
 
 export type NoulQuestion = {
   type: "noul";
@@ -55,11 +64,19 @@ export class JevError extends Error {
   bodySummary?: string;
   retryAfterMs?: number;
   stderr?: string;
+  /** failover 全链败尽时携带历次尝试记录（仅链路耗尽时非空） */
+  failoverAttempts?: AttemptRecord[];
 
   constructor(
     kind: JevErrorKind,
     message: string,
-    opts: { status?: number; bodySummary?: string; retryAfterMs?: number; stderr?: string } = {}
+    opts: {
+      status?: number;
+      bodySummary?: string;
+      retryAfterMs?: number;
+      stderr?: string;
+      failoverAttempts?: AttemptRecord[];
+    } = {}
   ) {
     super(message);
     this.name = "JevError";
@@ -68,6 +85,7 @@ export class JevError extends Error {
     this.bodySummary = opts.bodySummary;
     this.retryAfterMs = opts.retryAfterMs;
     this.stderr = opts.stderr;
+    this.failoverAttempts = opts.failoverAttempts;
   }
 }
 
@@ -329,27 +347,131 @@ async function request(
   }
 }
 
-export type AskParams = { state: string | object | string[]; questions: Record<string, Question>; model?: string } & JevConfig;
+export type AskParams = {
+  state: string | object | string[];
+  questions: Record<string, Question>;
+  model?: string;
+  /** 多上游链路：null/undefined 走旧单端点链路（fail-open） */
+  failover?: FailoverConfig | null;
+  /** 冷却跳过表；缺省用进程内共享 defaultCooldownTracker */
+  tracker?: CooldownTracker;
+} & JevConfig;
 
-/** System One：对 state 求值一组类型化问题。不自动重试。 */
-export async function ask(params: AskParams): Promise<SystemOneResult> {
-  const { state, questions, model, ...cfg } = params;
-  // model 解析序：显式参数 > 进程 env JEV_AI_MODEL > env 档 > 内建默认（env 档路径与 apiKey 同序）。
-  const resolvedModel =
-    model ??
-    (process.env.JEV_AI_MODEL ||
-      readEnvFile(resolveEnvFilePath(cfg)).JEV_AI_MODEL ||
-      "oc/jev-1.13-free");
-  const res = (await request(
-    "POST",
-    "/v1/systemone",
-    { model: resolvedModel, state, questions },
-    cfg
-  )) as SystemOneResult;
-  if (!res || typeof res !== "object" || !res.answers) {
-    throw new JevError("unexpected", "响应缺少 answers 字段");
+// ── 传输 meta（胜出 upstream 与历次尝试）──
+// 机制：不可枚举 symbol 属性。对 AskFn 返回类型 SystemOneResult 形状零改动，
+// JSON.stringify / Object.keys 均不可见，旧消费方逐字节不变；compliance 层读之以落 audit。
+const ASK_META = Symbol("jev.askMeta");
+
+export type AskMeta = {
+  /** 胜出（成功返回）之 upstream 名 */
+  upstream: string;
+  /** 切换发生时的失败尝试记录（首级即成则空数组） */
+  attempts: AttemptRecord[];
+};
+
+/** 写入 ask() 结果上之传输 meta（不可枚举 symbol；compliance 测试与内部使用）。 */
+export function setAskMeta(res: SystemOneResult, meta: AskMeta): void {
+  try {
+    Object.defineProperty(res, ASK_META, {
+      value: meta,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    /* 冻结对象等极端情形：meta 缺席无害 */
   }
-  return res;
+}
+
+/** 读取 ask() 结果上之传输 meta（无则 undefined——旧链路或未发生）。 */
+export function getAskMeta(res: SystemOneResult): AskMeta | undefined {
+  return (res as Record<PropertyKey, unknown>)[ASK_META] as AskMeta | undefined;
+}
+
+function withAttempts(err: JevError, attempts: AttemptRecord[]): JevError {
+  err.failoverAttempts = [...attempts];
+  return err;
+}
+
+/** System One：对 state 求值一组类型化问题。不自动重试（同一 upstream 之 POST 绝不重发）；
+ *  携 failover 链路时按序切换上游，每级一发。 */
+export async function ask(params: AskParams): Promise<SystemOneResult> {
+  const { state, questions, model, failover, tracker, ...cfg } = params;
+  // 显式 baseUrl/apiKey（如校准脚本）绕开链路——量具读数不得混入他端点。
+  const chain =
+    failover && cfg.baseUrl === undefined && cfg.apiKey === undefined ? failover : null;
+  if (!chain) {
+    // 旧单端点链路（与历版逐字节一致）。
+    // model 解析序：显式参数 > 进程 env JEV_AI_MODEL > env 档 > 内建默认（env 档路径与 apiKey 同序）。
+    const resolvedModel =
+      model ??
+      (process.env.JEV_AI_MODEL ||
+        readEnvFile(resolveEnvFilePath(cfg)).JEV_AI_MODEL ||
+        "oc/jev-1.13-free");
+    const res = (await request(
+      "POST",
+      "/v1/systemone",
+      { model: resolvedModel, state, questions },
+      cfg
+    )) as SystemOneResult;
+    if (!res || typeof res !== "object" || !res.answers) {
+      throw new JevError("unexpected", "响应缺少 answers 字段");
+    }
+    return res;
+  }
+
+  // failover 链路：按配置原序走链；冷却中者记 cooldown 跳过（零请求、无 status/ms），
+  // 不剔除不隐藏——胜者非首配 upstream 时（真实切换或冷却跳过）meta.attempts 必非空，audit 由此可辨。
+  // 全在冷却时保底尝试首名（绝不空链，语义同 eligible）。每级恰一次请求。
+  const tr = tracker ?? defaultCooldownTracker;
+  const eligible = new Set(tr.eligible(chain.upstreams.map((u) => u.name)));
+  const attempts: AttemptRecord[] = [];
+  let lastErr: JevError = new JevError(
+    "unexpected",
+    "failover 链路为空（upstreams 校验异常）"
+  );
+  let attemptedAny = false;
+  for (const up of chain.upstreams) {
+    if (!eligible.has(up.name)) {
+      attempts.push({ name: up.name, kind: "cooldown" }); // 冷却跳过：无请求发生，无 status、无 ms
+      continue;
+    }
+    // 显式 model 参数仅覆盖首个实际尝试之 upstream；余者各用自身 model。
+    const useModel = !attemptedAny && model !== undefined ? model : up.model;
+    attemptedAny = true;
+    const t0 = Date.now();
+    try {
+      const res = (await request(
+        "POST",
+        "/v1/systemone",
+        { model: useModel, state, questions },
+        {
+          baseUrl: up.baseUrl,
+          apiKey: up.apiKey,
+          proxy: up.proxy, // 缺省 → resolveConfig 走既有 JEV_AI_PROXY 链
+          timeoutMs: chain.timeoutMs,
+        }
+      )) as SystemOneResult;
+      if (!res || typeof res !== "object" || !res.answers) {
+        throw new JevError("unexpected", "响应缺少 answers 字段");
+      }
+      tr.markSuccess(up.name);
+      setAskMeta(res, { upstream: up.name, attempts: [...attempts] });
+      return res;
+    } catch (err) {
+      const je = err instanceof JevError ? err : new JevError("unexpected", String(err));
+      const rec: AttemptRecord = { name: up.name, kind: je.kind, ms: Date.now() - t0 };
+      if (je.status !== undefined) rec.status = je.status;
+      if (je.retryAfterMs !== undefined) rec.retryAfterMs = je.retryAfterMs;
+      attempts.push(rec);
+      const cls = classifyFailure({ httpStatus: je.status, kind: je.kind });
+      tr.markFailure(up.name, cls.cooldownable);
+      lastErr = je;
+      if (!cls.switchable) throw withAttempts(je, attempts); // 不可切换：立即抛，下一级零请求
+      // 可切换：继续下一级（绝不睡眠、绝不重发同端）
+    }
+  }
+  throw withAttempts(lastErr, attempts); // 全链败尽
 }
 
 /** 已连接模型列表。 */

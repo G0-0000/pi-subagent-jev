@@ -5,7 +5,19 @@
 // 规则全由配置驱动：规则 id 为任意字符串，每规则自带 blockWhen（below/above）与 threshold，
 // verdict 标签与拦截判定均按配置计算，无硬编码规则 id。
 // 任何错误 fail-open：JEV 出错、配置档出错、概率缺失皆放行，绝不外抛。
-import { ask as defaultAsk, JevError, type AskParams, type SystemOneResult } from "./client.ts";
+import {
+  ask as defaultAsk,
+  getAskMeta,
+  JevError,
+  type AskParams,
+  type SystemOneResult,
+} from "./client.ts";
+import {
+  CooldownTracker,
+  loadFailoverConfig,
+  type AttemptRecord,
+  type FailoverConfig,
+} from "./failover.ts";
 import { readFileSync } from "node:fs";
 
 /** 规则 id：任意字符串（R1-R4 仅为内建默认，配置档可自定义新 id）。 */
@@ -118,6 +130,10 @@ export type AuditLineFields = {
   blocked?: string[];
   probs?: Record<string, number>;
   error?: string;
+  /** 胜者非首配 upstream 时（真实切换或冷却跳过）：胜出 upstream 名 */
+  upstream?: string;
+  /** 同上时：历次失败尝试记录（冷却跳过记 kind:"cooldown" 无 status/ms；全链败尽之错误行亦只带此键、无 upstream） */
+  failover?: AttemptRecord[];
 };
 
 export type AuditLine = {
@@ -131,6 +147,8 @@ export type AuditLine = {
   blocked?: string[];
   probs?: Record<string, number>;
   error?: string;
+  upstream?: string;
+  failover?: AttemptRecord[];
 };
 
 /** audit.jsonl 单行构造（不含换行符）。task_excerpt 按 Unicode 码点截 ≤200 字。 */
@@ -147,6 +165,8 @@ export function auditLine(fields: AuditLineFields): AuditLine {
   if (fields.blocked && fields.blocked.length > 0) line.blocked = fields.blocked;
   if (fields.probs) line.probs = fields.probs;
   if (fields.error !== undefined) line.error = fields.error;
+  if (fields.upstream !== undefined) line.upstream = fields.upstream;
+  if (fields.failover && fields.failover.length > 0) line.failover = fields.failover;
   return line;
 }
 
@@ -249,6 +269,25 @@ export function loadRuleSets(path: string): LoadedRules {
 
 export type AskFn = (params: AskParams) => Promise<SystemOneResult>;
 
+// failover 配置：模块级懒缓存，随扩展加载读一次（/reload 重导入模块即重置，
+// 与 envFileCache / 规则配置同生命周期）；缺档/坏档返 null → 旧单端点链路（fail-open）。
+let failoverCache: FailoverConfig | null | undefined;
+function getFailover(): FailoverConfig | null {
+  if (failoverCache === undefined) failoverCache = loadFailoverConfig();
+  return failoverCache;
+}
+
+// 冷却表：与 failover 配置同生命周期（/reload 重导入模块即重置），构造时带上链路 cooldownMs——
+// 配置之 cooldownMs 自此对派单拦截生效；无链路时用缺省 tracker（旧单端点路径本就不触冷却）。
+let trackerCache: CooldownTracker | undefined;
+function getTracker(): CooldownTracker {
+  if (trackerCache === undefined) {
+    const fo = getFailover();
+    trackerCache = fo ? new CooldownTracker(undefined, fo.cooldownMs) : new CooldownTracker();
+  }
+  return trackerCache;
+}
+
 export type CheckResult = { line: AuditLine; violations: string[] };
 
 /**
@@ -277,7 +316,14 @@ export async function checkDispatch(
     (r) => typeof r.instructions === "string" && r.instructions.trim() !== ""
   );
   if (rules.length === 0) return null;
-  const askFn = opts.askFn ?? defaultAsk;
+  const askFn: AskFn =
+    opts.askFn ??
+    ((p) =>
+      defaultAsk({
+        ...p,
+        failover: getFailover(),
+        tracker: getTracker(),
+      }));
   const start = Date.now();
   try {
     const questions = Object.fromEntries(
@@ -302,6 +348,10 @@ export async function checkDispatch(
       if (typeof raw === "number" && Number.isFinite(raw)) probs[r.id] = raw;
     }
     const v = verdict(rules, probs);
+    const meta = getAskMeta(res);
+    // attempts 非空即落 upstream/failover 键：真实切换与冷却跳过（kind:"cooldown"）皆可辨；
+    // 首配 upstream 即成（attempts 空）仍不落键，与旧单端点链路无异
+    const switched = !!(meta && meta.attempts.length > 0);
     const blocked: string[] = [];
     const violations: string[] = [];
     for (const r of rules) {
@@ -323,12 +373,18 @@ export async function checkDispatch(
         latencyMs: Date.now() - start,
         blocked,
         probs: opts.auditProbabilities ? probs : undefined,
+        ...(switched && meta ? { upstream: meta.upstream, failover: meta.attempts } : {}),
       }),
       violations,
     };
   } catch (err) {
     const error =
       err instanceof JevError ? `${err.kind}: ${err.message}` : `unexpected: ${String(err)}`;
+    // 全链败尽之错误行携带历次尝试（无胜者，故无 upstream 键）
+    const failoverAttempts =
+      err instanceof JevError && err.failoverAttempts && err.failoverAttempts.length > 0
+        ? err.failoverAttempts
+        : undefined;
     return {
       line: auditLine({
         agent,
@@ -338,6 +394,7 @@ export async function checkDispatch(
         verdict: "error",
         latencyMs: Date.now() - start,
         error,
+        ...(failoverAttempts ? { failover: failoverAttempts } : {}),
       }),
       violations: [],
     };

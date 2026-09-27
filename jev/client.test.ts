@@ -4,7 +4,34 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ask, listModels, JevError } from "./client.ts";
+import { ask, getAskMeta, listModels, JevError } from "./client.ts";
+import { CooldownTracker, type FailoverConfig } from "./failover.ts";
+
+/** 由若干 mock server 拼一条 failover 链路配置（独立 tracker，测试间互不泄漏）。 */
+function chain(
+  upstreams: { name: string; url: string }[],
+  opts: { timeoutMs?: number; cooldownMs?: number } = {}
+): { failover: FailoverConfig; tracker: CooldownTracker } {
+  return {
+    failover: {
+      timeoutMs: opts.timeoutMs ?? 5000,
+      cooldownMs: opts.cooldownMs ?? 30000,
+      upstreams: upstreams.map((u) => ({
+        name: u.name,
+        baseUrl: u.url,
+        apiKey: "sk-test-chain",
+        model: `model-${u.name}`,
+      })),
+    },
+    tracker: new CooldownTracker(),
+  };
+}
+
+const OK_BODY = { model: "m", answers: { q: { noul: 0.5 } }, usage: {} };
+function ok(res: http.ServerResponse) {
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(OK_BODY));
+}
 
 /** 起一个 127.0.0.1 随机端口 mock server；handler 可读取请求并响应。 */
 function startServer(
@@ -433,3 +460,369 @@ test("⑮ baseUrl 全链路缺席 → not_configured", withNoEnvKey(async () => 
   }
 }));
 
+// ── failover 链路（多 mock server；每例独立 tracker）──
+
+const Q = { q: { type: "noul" as const, instructions: "i" } };
+
+function assertBodyModel(body: string, model: string) {
+  assert.equal(JSON.parse(body).model, model);
+}
+
+test("⑯ failover：首个 500 → 次级 200，meta.upstream=backup 且 attempts 记录败级", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 500;
+    res.end("{}");
+  });
+  const srv2 = await startServer((_req, body, res) => {
+    assertBodyModel(body, "model-backup"); // 次级用自身 model
+    ok(res);
+  });
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal((r.answers.q as { noul: number }).noul, 0.5);
+    const meta = getAskMeta(r);
+    assert.ok(meta);
+    assert.equal(meta.upstream, "backup");
+    assert.equal(meta.attempts.length, 1);
+    assert.equal(meta.attempts[0].name, "primary");
+    assert.equal(meta.attempts[0].kind, "unexpected");
+    assert.equal(meta.attempts[0].status, 500);
+    assert.equal(typeof meta.attempts[0].ms, "number");
+    assert.equal(srv2.requests(), 1);
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("⑯b failover：首级即成 → meta.upstream=primary、attempts 空，且不可枚举不进 JSON", async () => {
+  const srv1 = await startServer((_req, body, res) => {
+    assertBodyModel(body, "model-explicit"); // 显式 model 覆盖仅首级
+    ok(res);
+  });
+  const srv2 = await startServer(() => {
+    throw new Error("次级不应被请求");
+  });
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    const r = await ask({
+      state: "s",
+      questions: Q,
+      model: "model-explicit",
+      failover,
+      tracker,
+    });
+    const meta = getAskMeta(r);
+    assert.ok(meta);
+    assert.equal(meta.upstream, "primary");
+    assert.deepEqual(meta.attempts, []);
+    assert.ok(!JSON.stringify(r).includes("primary")); // symbol 不可枚举
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("⑰ failover：429+Retry-After → 切次级成功，不等待（耗时远低于 Retry-After）", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 429;
+    res.setHeader("Retry-After", "60");
+    res.end("{}");
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  const t0 = Date.now();
+  try {
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 5000, `不睡眠：耗时 ${elapsed}ms 应远低于 Retry-After 60s`);
+    assert.equal(getAskMeta(r)?.upstream, "backup");
+    const a0 = getAskMeta(r)!.attempts[0];
+    assert.equal(a0.kind, "rate_limited");
+    assert.equal(a0.status, 429);
+    assert.equal(a0.retryAfterMs, 60000); // Retry-After 仅解析入记录，绝不等待
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("⑱ failover：401 → 切次级成功", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 401;
+    res.end("{}");
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal(getAskMeta(r)?.upstream, "backup");
+    assert.equal(getAskMeta(r)?.attempts[0].kind, "unauthorized");
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("⑲ failover：两级皆 502 → 抛 upstream 且 failoverAttempts 记两败级", async () => {
+  const mk = () =>
+    startServer((_req, _b, res) => {
+      res.statusCode = 502;
+      res.end("{}");
+    });
+  const srv1 = await mk();
+  const srv2 = await mk();
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => {
+        assert.ok(e instanceof JevError && e.kind === "upstream");
+        assert.equal(e.status, 502);
+        assert.ok(e.failoverAttempts);
+        assert.equal(e.failoverAttempts!.length, 2);
+        assert.deepEqual(
+          e.failoverAttempts!.map((a) => a.name),
+          ["primary", "backup"]
+        );
+        for (const a of e.failoverAttempts!) assert.equal(a.kind, "upstream");
+        return true;
+      }
+    );
+    assert.equal(srv1.requests(), 1); // 每级恰一发，同端绝不重发
+    assert.equal(srv2.requests(), 1);
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("⑳ failover：首级 422 → 立即抛，次级零请求", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 422;
+    res.end(JSON.stringify({ error: "bad" }));
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => e instanceof JevError && e.kind === "invalid_request"
+    );
+    assert.equal(srv2.requests(), 0); // 不可切换：下一级零请求
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉑ failover：首级连接拒 → network 切次级成功", async () => {
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: "http://127.0.0.1:9" },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal(getAskMeta(r)?.upstream, "backup");
+    assert.equal(getAskMeta(r)?.attempts[0].kind, "network");
+  } finally {
+    await srv2.close();
+  }
+});
+
+test("㉒ failover：冷却跨两次 ask——第二次跳过已死首级", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 502;
+    res.end("{}");
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    const r1 = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal(getAskMeta(r1)?.upstream, "backup");
+    const r2 = await ask({ state: "s", questions: Q, failover, tracker }); // 同一 tracker
+    const m2 = getAskMeta(r2)!;
+    assert.equal(m2.upstream, "backup"); // 首级冷却中被跳过
+    assert.equal(m2.attempts.length, 1); // 冷却跳过亦可辨：attempts 非空
+    assert.deepEqual(m2.attempts[0], { name: "primary", kind: "cooldown" });
+    assert.equal(m2.attempts[0].status, undefined); // 无请求发生：无 status
+    assert.equal(m2.attempts[0].ms, undefined); // 无请求发生：无 ms
+    assert.equal(srv1.requests(), 1); // 死首级仅被请求一次（第二次零请求）
+    assert.equal(srv2.requests(), 2);
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉓ failover：首级慢响应超 timeoutMs → timeout 切次级", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    setTimeout(() => ok(res), 1500); // --max-time 由 timeoutMs 300 收敛为 1s，先超时
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain(
+    [
+      { name: "primary", url: srv1.url },
+      { name: "backup", url: srv2.url },
+    ],
+    { timeoutMs: 300 }
+  );
+  try {
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal(getAskMeta(r)?.upstream, "backup");
+    assert.equal(getAskMeta(r)?.attempts[0].kind, "timeout");
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉔ failover：显式 baseUrl/apiKey 绕开链路（校准脚本免役）", async () => {
+  const srv1 = await startServer(() => {
+    throw new Error("链路首级不应被请求");
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([{ name: "primary", url: srv1.url }]);
+  try {
+    const r = await ask({
+      state: "s",
+      questions: Q,
+      baseUrl: srv2.url,
+      apiKey: "test-key",
+      failover,
+      tracker,
+    });
+    assert.equal(getAskMeta(r), undefined); // 旧链路无 meta
+    assert.equal(srv1.requests(), 0);
+    assert.equal(srv2.requests(), 1);
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉕ failover：null 配置 → 旧单端点链路（429 立即抛且单发）", async () => {
+  const srv = await startServer((_req, _b, res) => {
+    res.statusCode = 429;
+    res.end("{}");
+  });
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover: null, tracker: new CooldownTracker(), baseUrl: srv.url, apiKey: "test-key" }),
+      (e: unknown) => e instanceof JevError && e.kind === "rate_limited"
+    );
+    assert.equal(srv.requests(), 1);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("㉖ failover：200 坏体（缺 answers）→ 切次级", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.end(JSON.stringify({ nope: true }));
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal(getAskMeta(r)?.upstream, "backup");
+    const a0 = getAskMeta(r)!.attempts[0];
+    assert.equal(a0.kind, "unexpected");
+    assert.equal(a0.status, undefined); // 无 HTTP status（200 坏体）
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉗ failover：首级 400 → 立即抛，次级零请求", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 400;
+    res.end(JSON.stringify({ error: "bad" }));
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => e instanceof JevError && e.kind === "unexpected" && e.status === 400
+    );
+    assert.equal(srv2.requests(), 0); // 不可切换：下一级零请求
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉘ failover：首级 409 → 立即抛，次级零请求", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 409;
+    res.end(JSON.stringify({ error: "conflict" }));
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => e instanceof JevError && e.kind === "unexpected" && e.status === 409
+    );
+    assert.equal(srv2.requests(), 0); // 不可切换：下一级零请求
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉙ failover：首级 402 → 立即抛，次级零请求", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 402;
+    res.end(JSON.stringify({ error: "pay" }));
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => e instanceof JevError && e.kind === "payment_required"
+    );
+    assert.equal(srv2.requests(), 0); // 不可切换：下一级零请求
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});

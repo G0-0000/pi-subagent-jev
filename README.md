@@ -68,6 +68,10 @@ When enabled it does three things: injects the persona file's body (frontmatter 
 
 > Note: the ceiling exemption resolves `pi-subagents` from the host pi installation (`~/.pi/agent/npm`) via a fallback chain — packages load with separate module roots, and the ceiling registry lives in the host's own pi-subagents instance, so bundling the dependency inside this package would register into the wrong instance.
 
+## Multi-upstream failover (optional)
+
+Create `~/.pi/agent/jev-comp/upstreams.json` (permissions 600; copy from [examples/upstreams.sample.json](examples/upstreams.sample.json)) to list ordered upstreams. `ask()` tries them in order — one request per upstream, never retrying the same one; connection errors, timeouts, 5xx, 429, 401, 403, 404 and unusable bodies switch to the next upstream, while 402/422/3xx fail immediately. Recently-dead connection-level upstreams are skipped in-process for `cooldownMs` (default 30s, memory only). If the file is absent or invalid, or the whole chain fails, behavior falls back to the legacy single-upstream path (fail-open). Read once at extension load; run `/reload` after editing. Runtime data — never committed.
+
 ## Fail-open
 
 If the JEV endpoint is unreachable or not configured, the API key is missing, or the rules file is malformed, dispatches are **allowed through**. The gate never blocks on its own failure.
@@ -155,6 +159,10 @@ JEV_AI_MODEL=可选之模型覆盖
 启用后行三事：注入 persona 档正文（剥 frontmatter，以 `<orchestrator_role>` 包裹）于系统提示；按清单裁剪并拦截主 agent 之直执行工具（独不拦 `subagent`）；注册子 agent 豁免（capability-ceiling），使子 agent 得全量能力。`personaFile` 所指档不存在时，唯注入一步静默跳过；配置档缺失或损坏则本扩展静默全不启用（fail-open）。子 agent 进程（`PI_SUBAGENT_CHILD=1`）一钩不注。
 
 > 注：ceiling 豁免经 fallback 链自宿主 pi 安装处（`~/.pi/agent/npm`）解析 `pi-subagents`——包之模块根各自隔离，而注册表存于宿主实例；若将依赖打入本包，徒注册于自家实例，宿主读不到。
+
+### 多上游 failover（可选）
+
+创建 `~/.pi/agent/jev-comp/upstreams.json`（权限 600；样例：[examples/upstreams.sample.json](examples/upstreams.sample.json)）即可列出按序上游。`ask()` 依序尝试——每级恰一发、同一端绝不重发；连接败/超时/5xx/429/401/403/404/坏体切下一级，402/422/3xx 立即失败。连接级败北之端点在进程内冷却 `cooldownMs`（缺省 30s，仅内存）内被跳过。档不存在或非法、或全链败尽，均回旧单端点链路（fail-open）。扩展加载时读一次，改后在 pi 内 `/reload`。运行时数据，不入库。
 
 ### Fail-open
 

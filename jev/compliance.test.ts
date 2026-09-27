@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { JevError } from "./client.ts";
+import { JevError, setAskMeta, type SystemOneResult } from "./client.ts";
 import {
   RULE_SETS,
   buildState,
@@ -384,4 +384,95 @@ test("⑱ checkDispatch：instructions 为空/空白的规则检查时跳过，�
   assert.deepEqual(Object.keys(res.line.rules!), ["X2"]); // X1 不进审计
   assert.equal(res.line.verdict, "pass");
   assert.deepEqual(res.violations, []);
+});
+
+// ── failover 审计字段 ──
+
+function okWithMeta(upstream: string, attempts: Parameters<typeof setAskMeta>[1]["attempts"]): AskFn {
+  return async () => {
+    const r: SystemOneResult = {
+      model: "model-backup",
+      answers: { R1: { noul: 0.9 }, R2: { noul: 0.9 }, R3: { noul: 0.1 }, R4: { noul: 0.1 } },
+      usage: {},
+    };
+    setAskMeta(r, { upstream, attempts });
+    return r;
+  };
+}
+
+test("㉙ checkDispatch：切换发生 → 审计行含 upstream（胜者）与 failover（败级），model 记胜者模型", async () => {
+  const res = await checkDispatch(
+    "delegate",
+    TASK,
+    {
+      askFn: okWithMeta("backup", [
+        { name: "primary", status: 502, kind: "upstream", ms: 12 },
+        { name: "middle", kind: "timeout", ms: 1005 },
+      ]),
+    }
+  );
+  assert.ok(res);
+  assert.equal(res.line.upstream, "backup");
+  assert.equal(res.line.model, "model-backup"); // 胜者模型照旧记 model 键
+  assert.ok(res.line.failover);
+  assert.equal(res.line.failover!.length, 2);
+  assert.deepEqual(res.line.failover![0], { name: "primary", status: 502, kind: "upstream", ms: 12 });
+  assert.equal(res.line.verdict, "pass");
+  assert.deepEqual(res.violations, []);
+});
+
+test("㉚ checkDispatch：未切换 → 审计行无 upstream/failover 键", async () => {
+  const askFn: AskFn = async () => ({
+    model: "m",
+    answers: { R1: { noul: 0.9 }, R2: { noul: 0.9 }, R3: { noul: 0.1 }, R4: { noul: 0.1 } },
+    usage: {},
+  });
+  const res = await checkDispatch("delegate", TASK, { askFn });
+  assert.ok(res);
+  assert.ok(!("upstream" in res.line));
+  assert.ok(!("failover" in res.line));
+
+  // meta 在但未切换（attempts 空）亦不落键
+  const res2 = await checkDispatch("delegate", TASK, { askFn: okWithMeta("primary", []) });
+  assert.ok(res2);
+  assert.ok(!("upstream" in res2!.line));
+  assert.ok(!("failover" in res2!.line));
+});
+
+test("㉛ checkDispatch：全链败尽 → error 行携 failover attempts（无 upstream），violations 空", async () => {
+  const attempts = [
+    { name: "primary", status: 502, kind: "upstream", ms: 10 },
+    { name: "backup", status: 502, kind: "upstream", ms: 11 },
+  ];
+  const res = await checkDispatch("delegate", TASK, {
+    askFn: async () => {
+      throw new JevError("upstream", "上游故障（HTTP 502）", { status: 502, failoverAttempts: attempts });
+    },
+  });
+  assert.ok(res);
+  assert.equal(res.line.verdict, "error");
+  assert.equal(res.line.error, "upstream: 上游故障（HTTP 502）");
+  assert.deepEqual(res.line.failover, attempts);
+  assert.ok(!("upstream" in res.line)); // 无胜者，无 upstream 键
+  assert.equal(res.line.model, null);
+  assert.deepEqual(res.violations, []); // 全链败尽亦 fail-open 放行
+});
+
+test("㉜ checkDispatch：冷却跳过成功 → 审计行含 upstream/failover（cooldown 记录逐字）；首配即成仍不落键", async () => {
+  const res = await checkDispatch("delegate", TASK, {
+    askFn: okWithMeta("backup", [{ name: "primary", kind: "cooldown" }]),
+  });
+  assert.ok(res);
+  assert.equal(res.line.upstream, "backup");
+  assert.deepEqual(res.line.failover, [{ name: "primary", kind: "cooldown" }]); // 逐字入行
+  assert.equal(res.line.failover![0].status, undefined); // 无请求发生：无 status
+  assert.equal(res.line.failover![0].ms, undefined); // 无请求发生：无 ms
+  assert.equal(res.line.verdict, "pass");
+  assert.deepEqual(res.violations, []);
+
+  // 首配 upstream 即成（attempts 空）→ 审计行仍无 upstream/failover 键
+  const first = await checkDispatch("delegate", TASK, { askFn: okWithMeta("primary", []) });
+  assert.ok(first);
+  assert.ok(!("upstream" in first!.line));
+  assert.ok(!("failover" in first!.line));
 });
