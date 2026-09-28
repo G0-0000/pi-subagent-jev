@@ -26,7 +26,9 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 6. 可以 `jev_models` 列端点已连模型，供用户拣选 model id。
 
 ## 第一步 · 读 prompt
-遣 scout 取 `~/.pi/agent/npm/node_modules/pi-subagents/agents/<agent>.md`，析其：职能、工具白名单（有无 bash）、行为契约（如「方向不自决」）、禁忌。注意别名（worker 有别名 developer/coder/implementer/develop）——配置以派单之名为键，约定只用正名。
+遣 scout 取该 agent 之定义档：**先查用户级 `~/.agents/<agent>.md`**，无则回落包内 `<pi-subagents 包>/agents/<agent>.md`。缘由：pi-subagents 硬编码扫描 `$HOME/.agents` 为用户级 agent 源，同名者遮蔽包内 builtin——勿径取包内档，包内未必是实际生效者。包之加载路径以 `pi list`／`~/.pi/agent/settings.json` 为准（未必是 `~/.pi/agent/npm/...`）。
+析其：职能、工具白名单（有无 bash）、行为契约（如「方向不自决」）、禁忌。**正名精确匹配先于别名解析**——若用户级已建同名正名档，该名即为独立 agent，不再是他者之别名；故配置规则键、派单名皆以正名。
+（注意：`coder` 在包内是 worker 之别名，然若用户级另建 `coder.md`，则为一独立 agent，非别名。）
 
 ## 第二步 · 定规则
 - **立则三纲**（2026-09-27 librarian 组实践定论）：
