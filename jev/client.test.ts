@@ -826,3 +826,151 @@ test("㉙ failover：首级 402 → 立即抛，次级零请求", async () => {
     await srv2.close();
   }
 });
+
+test("㉚ failover：全链冷却保底真发首名（记录标 fallback），不延长次级冷却", async () => {
+  // A 恒连接拒（network、可冷却）；B 先 500 后 200（可控开关）。注入时钟，全程不等真实时间。
+  let bAnswerOk = false;
+  const srvB = await startServer((_req, _b, res) => {
+    if (bAnswerOk) {
+      ok(res);
+    } else {
+      res.statusCode = 500;
+      res.end("{}");
+    }
+  });
+  const { failover } = chain(
+    [
+      { name: "A", url: "http://127.0.0.1:9" },
+      { name: "B", url: srvB.url },
+    ],
+    { cooldownMs: 1000 }
+  );
+  let fakeNow = 0;
+  const tracker = new CooldownTracker(() => fakeNow, 1000);
+  try {
+    // t=0：A network、B 500 → 两级皆入冷却（until=1000）。正常调度，记录不得带 fallback。
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => {
+        assert.ok(e instanceof JevError);
+        const recs = (e as JevError).failoverAttempts!;
+        assert.deepEqual(recs.map((a) => a.name), ["A", "B"]);
+        for (const a of recs) assert.equal(a.fallback, undefined); // 非保底：字段缺席
+        return true;
+      }
+    );
+    assert.equal(srvB.requests(), 1);
+
+    // t=999：两级皆冷却 → 保底真发 A；A 记录带 fallback，B 为 cooldown 跳过。
+    fakeNow = 999;
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => {
+        assert.ok(e instanceof JevError);
+        const recs = (e as JevError).failoverAttempts!;
+        assert.equal(recs.length, 2);
+        const a = recs[0];
+        assert.equal(a.name, "A");
+        assert.equal(a.kind, "network"); // 真发（cooldown 跳过者无此 kind）
+        assert.equal(a.fallback, true); // 保底标记
+        assert.equal(typeof a.ms, "number");
+        assert.equal(a.status, undefined);
+        assert.deepEqual(recs[1], { name: "B", kind: "cooldown" }); // 无 ms/status
+        return true;
+      }
+    );
+    assert.equal(srvB.requests(), 1); // 保底轮 B 零请求
+
+    // t=1000：B 自身冷却到点即被重试（证明 A 之保底尝试未延长 B 冷却），且此胜出无 fallback。
+    fakeNow = 1000;
+    bAnswerOk = true;
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal(getAskMeta(r)?.upstream, "B");
+    const m = getAskMeta(r)!;
+    assert.deepEqual(m.attempts, [{ name: "A", kind: "cooldown" }]); // A 仍冷却（其保底真发续期）
+    for (const a of m.attempts) assert.equal(a.fallback, undefined);
+    assert.equal(srvB.requests(), 2);
+  } finally {
+    await srvB.close();
+  }
+});
+
+test("㉛ failover：正常切换成功之败级记录无 fallback 字段", async () => {
+  const srv1 = await startServer((_req, _b, res) => {
+    res.statusCode = 502;
+    res.end("{}");
+  });
+  const srv2 = await startServer((_req, _b, res) => ok(res));
+  const { failover, tracker } = chain([
+    { name: "primary", url: srv1.url },
+    { name: "backup", url: srv2.url },
+  ]);
+  try {
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    assert.equal(getAskMeta(r)?.upstream, "backup");
+    const rec = getAskMeta(r)!.attempts[0];
+    assert.equal(rec.fallback, undefined); // 非保底：字段缺席
+    assert.ok(!("fallback" in rec));
+  } finally {
+    await srv1.close();
+    await srv2.close();
+  }
+});
+
+test("㉜ failover：全链冷却保底固定取首个（到期时点不同亦取 names[0]），成败皆标 fallback", async () => {
+  // A 冷却更长（until 更大）：若误取“最早到期者”会选 B；保底语义须固定取首个 A。
+  let aAnswerOk = false;
+  const srvA = await startServer((_req, _b, res) => {
+    if (aAnswerOk) {
+      ok(res);
+    } else {
+      res.statusCode = 502;
+      res.end("{}");
+    }
+  });
+  const srvB = await startServer((_req, _b, res) => ok(res));
+  const { failover } = chain(
+    [
+      { name: "A", url: srvA.url },
+      { name: "B", url: srvB.url },
+    ],
+    { cooldownMs: 1000 }
+  );
+  let fakeNow = 600;
+  const tracker = new CooldownTracker(() => fakeNow, 1000);
+  tracker.markFailure("B", true, 0); // until[B] = 1000
+  tracker.markFailure("A", true, 500); // until[A] = 1500（较 B 更晚）
+  try {
+    // t=600：两级皆冷却 → 保底真发 A（非最早到期之 B）；A 502 则为败级记录带 fallback，B 记 cooldown。
+    await assert.rejects(
+      ask({ state: "s", questions: Q, failover, tracker }),
+      (e: unknown) => {
+        assert.ok(e instanceof JevError);
+        const recs = (e as JevError).failoverAttempts!;
+        assert.equal(recs.length, 2);
+        assert.equal(recs[0].name, "A"); // 保底取首个
+        assert.equal(recs[0].kind, "upstream");
+        assert.equal(recs[0].status, 502);
+        assert.equal(recs[0].fallback, true);
+        assert.deepEqual(recs[1], { name: "B", kind: "cooldown" }); // 零请求
+        return true;
+      }
+    );
+    assert.equal(srvA.requests(), 1);
+    assert.equal(srvB.requests(), 0); // 若误取最早到期者（B）则会请求 B
+
+    // t=600：仍两级皆冷却，保底真发 A 而成 → 成功之保底同样可见（fallback:true）。
+    // A 即链首且即成，循环未及 B，故 attempts 空（此即保底成功需另落 fallback 键之因）。
+    aAnswerOk = true;
+    const r = await ask({ state: "s", questions: Q, failover, tracker });
+    const m = getAskMeta(r)!;
+    assert.equal(m.upstream, "A");
+    assert.equal(m.fallback, true);
+    assert.deepEqual(m.attempts, []);
+    assert.equal(srvA.requests(), 2);
+    assert.equal(srvB.requests(), 0);
+  } finally {
+    await srvA.close();
+    await srvB.close();
+  }
+});

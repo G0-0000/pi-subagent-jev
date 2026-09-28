@@ -32,6 +32,8 @@ export type AttemptRecord = {
   ms?: number;
   /** 429 Retry-After 解析值：仅记录上报，绝不等待 */
   retryAfterMs?: number;
+  /** 保底尝试标记——全链冷却时被迫真发之首名，非正常调度 */
+  fallback?: boolean;
 };
 
 /** 生效档路径（运行时数据，不入库；代码只读绝不写）。 */
@@ -135,6 +137,7 @@ export function classifyFailure(f: { httpStatus?: number; kind: string }): Failu
 /**
  * 进程内冷却跳过表：markFailure 仅对 cooldownable 败北记 untilMs；
  * eligible 按原序过滤冷却中者，全在冷却时保底返回首个（绝不返回空链）。
+ * eligibleDetailed 与 eligible 同逻辑，另报本次是否走了保底分支；eligible 委派之。
  * 纯内存 Map，重启即忘；时钟注入可测。
  */
 export class CooldownTracker {
@@ -158,10 +161,20 @@ export class CooldownTracker {
   }
 
   eligible(names: string[], nowMs?: number): string[] {
+    return this.eligibleDetailed(names, nowMs).names;
+  }
+
+  /** 与 eligible 同语义，另报本次是否走保底分支（全在冷却而被迫返回首名）。 */
+  eligibleDetailed(
+    names: string[],
+    nowMs?: number
+  ): { names: string[]; fellBack: boolean } {
     const t = nowMs ?? this.now();
     const out = names.filter((n) => (this.until.get(n) ?? 0) <= t);
-    if (out.length === 0 && names.length > 0) return [names[0]]; // 全在冷却：保底首名
-    return out;
+    if (out.length === 0 && names.length > 0) {
+      return { names: [names[0]], fellBack: true }; // 全在冷却：保底首名
+    }
+    return { names: out, fellBack: false };
   }
 }
 

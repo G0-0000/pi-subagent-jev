@@ -367,6 +367,8 @@ export type AskMeta = {
   upstream: string;
   /** 切换发生时的失败尝试记录（首级即成则空数组） */
   attempts: AttemptRecord[];
+  /** 保底尝试标记：全链冷却时被迫真发首名；仅在该情形下出现 */
+  fallback?: boolean;
 };
 
 /** 写入 ask() 结果上之传输 meta（不可枚举 symbol；compliance 测试与内部使用）。 */
@@ -422,9 +424,12 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
 
   // failover 链路：按配置原序走链；冷却中者记 cooldown 跳过（零请求、无 status/ms），
   // 不剔除不隐藏——胜者非首配 upstream 时（真实切换或冷却跳过）meta.attempts 必非空，audit 由此可辨。
-  // 全在冷却时保底尝试首名（绝不空链，语义同 eligible）。每级恰一次请求。
+  // 全在冷却时保底尝试首名（绝不空链，语义同 eligibleDetailed）；保底真发之首名于其尝试记录标
+  // fallback:true（全链冷却时被迫真发者，audit 由此与正常调度相辨）。每级恰一次请求。
   const tr = tracker ?? defaultCooldownTracker;
-  const eligible = new Set(tr.eligible(chain.upstreams.map((u) => u.name)));
+  const elig = tr.eligibleDetailed(chain.upstreams.map((u) => u.name));
+  const eligible = new Set(elig.names);
+  const fellBack = elig.fellBack; // 全链冷却保底：唯首名入链，非正常调度
   const attempts: AttemptRecord[] = [];
   let lastErr: JevError = new JevError(
     "unexpected",
@@ -456,11 +461,16 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
         throw new JevError("unexpected", "响应缺少 answers 字段");
       }
       tr.markSuccess(up.name);
-      setAskMeta(res, { upstream: up.name, attempts: [...attempts] });
+      setAskMeta(res, {
+        upstream: up.name,
+        attempts: [...attempts],
+        ...(fellBack ? { fallback: true } : {}), // 保底成功亦可见：仅全链冷却被迫真发首名时附键，否则键缺席
+      });
       return res;
     } catch (err) {
       const je = err instanceof JevError ? err : new JevError("unexpected", String(err));
       const rec: AttemptRecord = { name: up.name, kind: je.kind, ms: Date.now() - t0 };
+      if (fellBack) rec.fallback = true; // 保底真发之首名（全链冷却时被迫），标记以别于正常调度
       if (je.status !== undefined) rec.status = je.status;
       if (je.retryAfterMs !== undefined) rec.retryAfterMs = je.retryAfterMs;
       attempts.push(rec);

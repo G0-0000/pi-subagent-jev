@@ -243,3 +243,26 @@ test("⑲ CooldownTracker：注入 cooldownMs=1000 —— 500ms 冷却中，1500
   assert.deepEqual(tr.eligible(["a", "b"], 1499), ["b"]); // 1500 前仍冷却
   assert.deepEqual(tr.eligible(["a", "b"], 1500), ["a", "b"]); // 恰到期恢复
 });
+
+test("⑳ eligibleDetailed：三态（无冷却/部分/全冷却保底）＋空输入，显式 nowMs 胜过注入时钟", () => {
+  const tr = new CooldownTracker(() => 999_999, 30000); // 注入时钟恒指 999999
+  // (a) 无冷却（走缺省时钟）→ 原序全量、fellBack false
+  assert.deepEqual(tr.eligibleDetailed(["a", "b"]), { names: ["a", "b"], fellBack: false });
+  // (b) 部分冷却：a 于 t=0 冷却（until=30000）→ 显式 nowMs=0 下 a 仍冷，返其余、fellBack false
+  tr.markFailure("a", true, 0);
+  assert.deepEqual(tr.eligibleDetailed(["a", "b", "c"], 0), {
+    names: ["b", "c"],
+    fellBack: false,
+  });
+  // 显式 nowMs 胜过注入时钟：若改用注入时钟 999999，则 a 早已过期而全量返回
+  assert.deepEqual(tr.eligibleDetailed(["a", "b", "c"]), {
+    names: ["a", "b", "c"],
+    fellBack: false,
+  });
+  // (c) 全冷却 → 保底返回原序首个、fellBack true
+  tr.markFailure("b", true, 0);
+  tr.markFailure("c", true, 0);
+  assert.deepEqual(tr.eligibleDetailed(["a", "b", "c"], 0), { names: ["a"], fellBack: true });
+  // (d) 空输入 → 空、fellBack false（绝不保底出首名）
+  assert.deepEqual(tr.eligibleDetailed([], 0), { names: [], fellBack: false });
+});

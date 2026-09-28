@@ -140,6 +140,8 @@ export type AuditLineFields = {
   upstream?: string;
   /** 同上时：历次失败尝试记录（冷却跳过记 kind:"cooldown" 无 status/ms；全链败尽之错误行亦只带此键、无 upstream） */
   failover?: AttemptRecord[];
+  /** 保底尝试标记——本次成功之请求系全链冷却下保底真发之首名 */
+  fallback?: boolean;
 };
 
 export type AuditLine = {
@@ -155,6 +157,7 @@ export type AuditLine = {
   error?: string;
   upstream?: string;
   failover?: AttemptRecord[];
+  fallback?: boolean;
 };
 
 /** audit.jsonl 单行构造（不含换行符）。task_excerpt 按 Unicode 码点截 ≤200 字。 */
@@ -173,6 +176,7 @@ export function auditLine(fields: AuditLineFields): AuditLine {
   if (fields.error !== undefined) line.error = fields.error;
   if (fields.upstream !== undefined) line.upstream = fields.upstream;
   if (fields.failover && fields.failover.length > 0) line.failover = fields.failover;
+  if (fields.fallback) line.fallback = true;
   return line;
 }
 
@@ -367,9 +371,9 @@ export async function checkDispatch(
     }
     const v = verdict(rules, probs);
     const meta = getAskMeta(res);
-    // attempts 非空即落 upstream/failover 键：真实切换与冷却跳过（kind:"cooldown"）皆可辨；
-    // 首配 upstream 即成（attempts 空）仍不落键，与旧单端点链路无异
-    const switched = !!(meta && meta.attempts.length > 0);
+    // attempts 非空（真实切换或冷却跳过）或保底成功（meta.fallback，全链冷却下被迫真发首名）皆须落
+    // upstream 键；首配 upstream 正常即成（attempts 空且非保底）不落键，与旧单端点链路无异。
+    const routed = !!(meta && (meta.attempts.length > 0 || meta.fallback));
     const blocked: string[] = [];
     const violations: string[] = [];
     for (const r of rules) {
@@ -410,7 +414,13 @@ export async function checkDispatch(
         latencyMs: Date.now() - start,
         blocked,
         probs: opts.auditProbabilities ? probs : undefined,
-        ...(switched && meta ? { upstream: meta.upstream, failover: meta.attempts } : {}),
+        ...(routed && meta
+          ? {
+              upstream: meta.upstream,
+              failover: meta.attempts, // 空数组由 auditLine 略去（单端点链保底成功即无 failover 数组）
+              ...(meta.fallback ? { fallback: true } : {}),
+            }
+          : {}),
       }),
       violations,
     };

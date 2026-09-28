@@ -478,6 +478,26 @@ test("㉜ checkDispatch：冷却跳过成功 → 审计行含 upstream/failover�
   assert.ok(!("failover" in first!.line));
 });
 
+test("㉜b checkDispatch：保底成功 → 审计行含 upstream 与 fallback:true，无 failover 数组", async () => {
+  const askFn: AskFn = async () => {
+    const r: SystemOneResult = {
+      model: "model-A",
+      answers: { R1: { noul: 0.9 }, R2: { noul: 0.9 }, R3: { noul: 0.1 }, R4: { noul: 0.1 } },
+      usage: {},
+    };
+    // 全链冷却下保底真发首名而成：attempts 空（单端点链）但 fallback 为真
+    setAskMeta(r, { upstream: "A", attempts: [], fallback: true });
+    return r;
+  };
+  const res = await checkDispatch("delegate", TASK, { askFn });
+  assert.ok(res);
+  assert.equal(res.line.upstream, "A"); // 保底胜者亦落 upstream 键
+  assert.equal(res.line.fallback, true); // 保底成功可见（与首配正常即成相辨）
+  assert.ok(!("failover" in res.line)); // attempts 空：不落 failover 数组
+  assert.equal(res.line.verdict, "pass");
+  assert.deepEqual(res.violations, []);
+});
+
 // ── 训练数据记录（trainingLog）──
 
 const TRAIN_ANSWERS: AskFn = async () => ({
