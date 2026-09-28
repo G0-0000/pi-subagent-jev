@@ -18,6 +18,12 @@ import {
   type AttemptRecord,
   type FailoverConfig,
 } from "./failover.ts";
+import {
+  dispatchTrainingLine,
+  writeTrainingLine,
+  type TrainingQuestion,
+  type TrainingWriter,
+} from "./traininglog.ts";
 import { readFileSync } from "node:fs";
 
 /** 规则 id：任意字符串（R1-R4 仅为内建默认，配置档可自定义新 id）。 */
@@ -185,7 +191,7 @@ type RawRuleSet = { agentDesc?: unknown; rules?: unknown };
 /** loadRuleSets 返回：合并后规则集 ＋ 全局开关。 */
 export type LoadedRules = {
   agents: Record<string, AgentRuleSet>;
-  global: { auditProbabilities: boolean };
+  global: { auditProbabilities: boolean; trainingLog: boolean };
 };
 
 /** 配置档顶层保留键：全局开关，不视作 agent 名。 */
@@ -206,12 +212,13 @@ function parseCriteria(v: unknown): { true?: string; false?: string } | undefine
  * 已知 agent 之已知规则按字段覆盖（instructions 亦以配置档为准，内建仅作缺省），
  * JSON 中新 id 追加其后；JSON 中未知 agent 整组加入。
  * `_global: { auditProbabilities }` 为全局开关（缺省 false），控制审计行是否附 probs。
+ * `_global: { trainingLog }` 为训练数据记录开关（缺省 false），控制是否追加 training.jsonl。
  * 任何读取/解析错误 → 静默返内建默认（fail-open）。
  */
 export function loadRuleSets(path: string): LoadedRules {
   const fallback = (): LoadedRules => ({
     agents: RULE_SETS,
-    global: { auditProbabilities: false },
+    global: { auditProbabilities: false, trainingLog: false },
   });
   let raw: Record<string, RawRuleSet>;
   try {
@@ -222,8 +229,9 @@ export function loadRuleSets(path: string): LoadedRules {
     return fallback();
   }
   const g = (raw as Record<string, unknown>)[GLOBAL_KEY];
-  const auditProbabilities =
-    !!g && typeof g === "object" && (g as Record<string, unknown>).auditProbabilities === true;
+  const gObj = g && typeof g === "object" ? (g as Record<string, unknown>) : undefined;
+  const auditProbabilities = gObj?.auditProbabilities === true;
+  const trainingLog = gObj?.trainingLog === true;
   const merged: Record<string, AgentRuleSet> = {};
   for (const [agent, rs] of Object.entries(RULE_SETS)) {
     merged[agent] = { agentDesc: rs.agentDesc, rules: rs.rules.map((r) => ({ ...r })) };
@@ -264,7 +272,7 @@ export function loadRuleSets(path: string): LoadedRules {
       rules: order.map((id) => byId.get(id)!),
     };
   }
-  return { agents: merged, global: { auditProbabilities } };
+  return { agents: merged, global: { auditProbabilities, trainingLog } };
 }
 
 export type AskFn = (params: AskParams) => Promise<SystemOneResult>;
@@ -297,6 +305,8 @@ export type CheckResult = { line: AuditLine; violations: string[] };
  * 命中者以 `${id}: ${message}` 全列入 violations，规则 id 全列入 line.blocked。
  * noul 字段缺失或非有限数：该规则标 unknown、不拦（fail-open，红线三）。
  * opts.auditProbabilities 为 true 时审计行附 probs（规则 id → 原始概率，仅有限值）。
+ * opts.trainingLog 为 true 时（且求值未走 error 路径）另有 opts.writeTraining（缺省落 training.jsonl）
+ * 追加一条训练行；写入失败静默吞下。
  * JevError（及任何异常）捕获 → 返 error 行且 violations 为空，fail-open，绝不外抛。
  */
 export async function checkDispatch(
@@ -306,6 +316,10 @@ export async function checkDispatch(
     askFn?: AskFn;
     ruleSets?: Record<string, AgentRuleSet>;
     auditProbabilities?: boolean;
+    /** 训练数据记录开关（缺省 false，不记） */
+    trainingLog?: boolean;
+    /** 训练行写入器（缺省 writeTrainingLine 落 training.jsonl；测试可注入 mock） */
+    writeTraining?: TrainingWriter;
   } = {}
 ): Promise<CheckResult | null> {
   const ruleSets = opts.ruleSets ?? RULE_SETS;
@@ -325,6 +339,13 @@ export async function checkDispatch(
         tracker: getTracker(),
       }));
   const start = Date.now();
+  const state = buildState(agent, rs.agentDesc, task);
+  // 训练记录之问句数组（与请求载荷同源；criteria 有则透传）
+  const trainingQuestions: TrainingQuestion[] = rules.map((r) => ({
+    id: r.id,
+    instructions: r.instructions,
+    ...(r.criteria ? { criteria: r.criteria } : {}),
+  }));
   try {
     const questions = Object.fromEntries(
       rules.map((r) => [
@@ -336,10 +357,7 @@ export async function checkDispatch(
         },
       ])
     );
-    const res = await askFn({
-      state: buildState(agent, rs.agentDesc, task),
-      questions,
-    });
+    const res = await askFn({ state, questions });
     const answers = res.answers as Record<string, { noul?: unknown }>;
     // noul 缺失或非有限数：不进 probs → 审计标 unknown、不拦（fail-open，红线三）
     const probs: Record<string, number> = {};
@@ -361,6 +379,25 @@ export async function checkDispatch(
       if (hit) {
         blocked.push(r.id);
         violations.push(`${r.id}: ${r.message}`);
+      }
+    }
+    // 训练数据记录（开关开时；error 路径不记）：state 全量 ＋ 问句 ＋ 原始概率 ＋ 判定。
+    // 记录失败静默吞下，绝不阻断派单（fail-open，红线三）。
+    if (opts.trainingLog) {
+      const write: TrainingWriter = opts.writeTraining ?? writeTrainingLine;
+      try {
+        write(
+          dispatchTrainingLine({
+            agent,
+            state,
+            questions: trainingQuestions,
+            probs,
+            verdict: v.verdict === "violation" ? "violation" : "pass",
+            blocked,
+          })
+        );
+      } catch {
+        /* 记录失败绝不阻断派单 */
       }
     }
     return {

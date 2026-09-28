@@ -1,5 +1,5 @@
 {
-  "_global": { "auditProbabilities": false },
+  "_global": { "auditProbabilities": false, "trainingLog": false },
   "delegate": {
     "agentDesc": "a file-editing agent without shell access",
     "rules": [

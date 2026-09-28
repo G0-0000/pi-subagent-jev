@@ -12,11 +12,15 @@ import os from "node:os";
 import pathMod from "node:path";
 import { ask, listModels, JevError } from "../jev/client.ts";
 import { checkDispatch, loadRuleSets } from "../jev/compliance.ts";
+import { askTrainingLine, writeTrainingLine } from "../jev/traininglog.ts";
 
 const AUDIT_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "audit.jsonl");
 const RULES_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "compliance-rules.json");
 
 export default function (pi: ExtensionAPI) {
+  // 规则配置在扩展加载时读一次（改后 /reload 生效）；trainingLog 开关即取自此处
+  const config = loadRuleSets(RULES_PATH);
+
   pi.registerTool({
     name: "jev_ask",
     label: "Jev Ask",
@@ -36,6 +40,22 @@ export default function (pi: ExtensionAPI) {
           questions: params.questions as Parameters<typeof ask>[0]["questions"],
           model: params.model,
         });
+        // 训练数据记录（开关开时）：state ＋ 问句 ＋ 返回答案逐字留存。
+        // 记录失败静默吞下，绝不影响工具结果（fail-open，红线三）。
+        if (config.global.trainingLog) {
+          try {
+            writeTrainingLine(
+              askTrainingLine({
+                model: result.model,
+                state: params.state,
+                questions: params.questions,
+                answers: result.answers,
+              })
+            );
+          } catch {
+            /* 记录失败绝不阻断求值 */
+          }
+        }
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
           details: {},
@@ -89,7 +109,6 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  const config = loadRuleSets(RULES_PATH);
   pi.on("tool_call", async (event) => {
     if (event.toolName !== "subagent") return;
     const input = event.input as Record<string, unknown>;
@@ -101,6 +120,7 @@ export default function (pi: ExtensionAPI) {
       const res = await checkDispatch(agent, task, {
         ruleSets: config.agents,
         auditProbabilities: config.global.auditProbabilities,
+        trainingLog: config.global.trainingLog,
       });
       if (!res) return;
       appendFileSync(AUDIT_PATH, JSON.stringify(res.line) + "\n");

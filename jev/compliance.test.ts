@@ -15,6 +15,7 @@ import {
   checkDispatch,
   type AskFn,
 } from "./compliance.ts";
+import type { DispatchTrainingLine } from "./traininglog.ts";
 
 test("① verdict 全绿：R1/R2 高、R3/R4 低 → pass", () => {
   const r = verdict(RULE_SETS.delegate.rules, { R1: 0.9, R2: 0.85, R3: 0.05, R4: 0.2 });
@@ -475,4 +476,145 @@ test("㉜ checkDispatch：冷却跳过成功 → 审计行含 upstream/failover�
   assert.ok(first);
   assert.ok(!("upstream" in first!.line));
   assert.ok(!("failover" in first!.line));
+});
+
+// ── 训练数据记录（trainingLog）──
+
+const TRAIN_ANSWERS: AskFn = async () => ({
+  model: "m",
+  answers: { R1: { noul: 0.9 }, R2: { noul: 0.2 }, R3: { noul: 0.05 }, R4: { noul: 0.1 } },
+  usage: {},
+});
+
+test("㉝ checkDispatch trainingLog：缺省/false → 不写训练行", async () => {
+  let wrote = 0;
+  const writeTraining = () => void wrote++;
+  await checkDispatch("delegate", TASK, { askFn: TRAIN_ANSWERS, writeTraining });
+  assert.equal(wrote, 0); // 缺省 false
+  await checkDispatch("delegate", TASK, { askFn: TRAIN_ANSWERS, trainingLog: false, writeTraining });
+  assert.equal(wrote, 0);
+});
+
+test("㉞ checkDispatch trainingLog：on → 写派单训练行（state 全量、questions 数组、probs 原始、blocked）", async () => {
+  const lines: DispatchTrainingLine[] = [];
+  const res = await checkDispatch("delegate", TASK, {
+    askFn: TRAIN_ANSWERS,
+    trainingLog: true,
+    writeTraining: (l) => lines.push(l as DispatchTrainingLine),
+  });
+  assert.ok(res);
+  assert.equal(lines.length, 1);
+  const line = lines[0];
+  assert.equal(line.source, "dispatch");
+  assert.equal(line.agent, "delegate");
+  assert.equal(line.state, buildState("delegate", RULE_SETS.delegate.agentDesc, TASK)); // 全量 state
+  assert.deepEqual(line.questions.map((q) => q.id), ["R1", "R2", "R3", "R4"]);
+  assert.equal(line.questions[0].instructions, RULE_SETS.delegate.rules[0].instructions);
+  assert.deepEqual(line.probs, { R1: 0.9, R2: 0.2, R3: 0.05, R4: 0.1 });
+  assert.equal(line.verdict, "violation");
+  assert.deepEqual(line.blocked, ["R2"]);
+  // 训练记录不过 auditProbabilities 门：审计行仍无 probs 键
+  assert.equal(res.line.probs, undefined);
+  assert.ok(!("probs" in res.line));
+});
+
+test("㉟ checkDispatch trainingLog：error 路径（fail-open）不写训练行", async () => {
+  let wrote = 0;
+  const res = await checkDispatch("delegate", TASK, {
+    askFn: async () => {
+      throw new JevError("timeout", "请求超时");
+    },
+    trainingLog: true,
+    writeTraining: () => void wrote++,
+  });
+  assert.ok(res);
+  assert.equal(res.line.verdict, "error");
+  assert.equal(wrote, 0);
+});
+
+test("㊱ checkDispatch trainingLog：writer 抛异常被吞，verdict/violations 不受影响", async () => {
+  const res = await checkDispatch("delegate", TASK, {
+    askFn: TRAIN_ANSWERS,
+    trainingLog: true,
+    writeTraining: () => {
+      throw new Error("disk full");
+    },
+  });
+  assert.ok(res);
+  assert.equal(res.line.verdict, "violation");
+  assert.deepEqual(res.violations, ["R2: 任务无确定内容"]);
+  assert.deepEqual(res.line.blocked, ["R2"]);
+});
+
+test("㊲ checkDispatch trainingLog：questions 携 criteria（配则透传）、probs 不受 auditProbabilities 门限", async () => {
+  const ruleSets = {
+    reviewer: {
+      agentDesc: "a code-review agent",
+      rules: [
+        {
+          id: "C1",
+          instructions: "Does the task break backwards compatibility?",
+          criteria: { true: "t", false: "f" },
+          blockWhen: "above" as const,
+          threshold: 0.6,
+          message: "C1 违规",
+        },
+      ],
+    },
+  };
+  const lines: DispatchTrainingLine[] = [];
+  const res = await checkDispatch("reviewer", TASK, {
+    ruleSets,
+    auditProbabilities: true,
+    trainingLog: true,
+    writeTraining: (l) => lines.push(l as DispatchTrainingLine),
+    askFn: async () => ({ model: "m", answers: { C1: { noul: 0.9 } }, usage: {} }),
+  });
+  assert.ok(res);
+  assert.equal(lines.length, 1);
+  assert.deepEqual(lines[0].questions[0].criteria, { true: "t", false: "f" });
+  assert.deepEqual(lines[0].probs, { C1: 0.9 });
+  // auditProbabilities 开时审计行亦带 probs（两开关互不影响）
+  assert.deepEqual(res.line.probs, { C1: 0.9 });
+});
+
+test("㊳ loadRuleSets/_global：trainingLog 解析，缺省 false", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const on = path.join(dir, "on.json");
+  writeFileSync(
+    on,
+    JSON.stringify({ _global: { trainingLog: true }, delegate: { rules: [] } })
+  );
+  assert.equal(loadRuleSets(on).global.trainingLog, true);
+  const off = path.join(dir, "off.json");
+  writeFileSync(off, JSON.stringify({ delegate: { rules: [] } }));
+  assert.equal(loadRuleSets(off).global.trainingLog, false);
+});
+
+test("㊴ checkDispatch trainingLog：noul 非有限数（NaN/Infinity）→ 训练行 probs 排除该规则，规则仍标 unknown（fail-open）", async () => {
+  // 训练路径与审计路径同源取值：非有限数不入 probs，训练行不得携带 NaN/Infinity
+  const askFn: AskFn = async () => ({
+    model: "m",
+    answers: { R1: { noul: 0.9 }, R2: { noul: NaN }, R3: { noul: Infinity }, R4: { noul: 0.1 } },
+    usage: {},
+  });
+  const lines: DispatchTrainingLine[] = [];
+  const res = await checkDispatch("delegate", TASK, {
+    askFn,
+    auditProbabilities: true,
+    trainingLog: true,
+    writeTraining: (l) => lines.push(l as DispatchTrainingLine),
+  });
+  assert.ok(res);
+  assert.equal(lines.length, 1);
+  const line = lines[0];
+  // 非有限数被排除，训练行不含 NaN/Infinity
+  assert.deepEqual(line.probs, { R1: 0.9, R4: 0.1 });
+  assert.ok(!("R2" in line.probs) && !("R3" in line.probs));
+  // 该规则仍按既有 fail-open 语义标 unknown、不拦
+  assert.equal(res.line.rules!.R2, "unknown");
+  assert.equal(res.line.rules!.R3, "unknown");
+  assert.equal(line.verdict, "pass");
+  assert.deepEqual(line.blocked, undefined);
+  assert.deepEqual(res.violations, []);
 });
