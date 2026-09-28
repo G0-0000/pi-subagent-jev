@@ -1,5 +1,15 @@
 {
   "_global": { "auditProbabilities": false, "trainingLog": false },
+  "_questions": {
+    "Q001": {
+      "label": "措辞含糊/越界",
+      "instructions": "Does the task contain ambiguous, contradictory, or misleading wording, or any statement that could invite the agent to wander beyond the stated task scope?",
+      "criteria": {
+        "true": "The wording is vague, self-contradictory, or invites work beyond the stated scope",
+        "false": "The wording is precise and the requested work stays within the stated scope"
+      }
+    }
+  },
   "delegate": {
     "agentDesc": "a file-editing agent without shell access",
     "rules": [
@@ -30,6 +40,30 @@
         "blockWhen": "above",
         "threshold": 0.8,
         "message": "任务要求 agent 自行探索查资料"
+      }
+    ]
+  },
+  "worker": {
+    "agentDesc": "a generic implementation worker",
+    "rules": [
+      {
+        "id": "W6",
+        "question": "Q001",
+        "blockWhen": "above",
+        "threshold": 0.7,
+        "message": "任务措辞含糊/易致误解或越界，请澄清后重派"
+      }
+    ]
+  },
+  "coder": {
+    "agentDesc": "a coding agent (example: a second agent sharing question Q001)",
+    "rules": [
+      {
+        "id": "C4",
+        "question": "Q001",
+        "blockWhen": "above",
+        "threshold": 0.7,
+        "message": "任务措辞含糊/易致误解或越界，请澄清后重派"
       }
     ]
   },

@@ -29,6 +29,10 @@ import { readFileSync } from "node:fs";
 /** 规则 id：任意字符串（R1-R4 仅为内建默认，配置档可自定义新 id）。 */
 export type RuleId = string;
 
+/**
+ * 有效规则（载入侧形状，与旧版逐字相同）：`instructions`/`criteria` 或来自规则内联字段，
+ * 或来自其 `question` 所引之顶层问句库 `_questions`（载入时即展开，故消费方无须知道引用之存在）。
+ */
 export type RuleConfig = {
   id: RuleId;
   instructions: string;
@@ -180,15 +184,26 @@ export function auditLine(fields: AuditLineFields): AuditLine {
   return line;
 }
 
-/** 配置档中单个规则条目：字段皆可覆盖；instructions 亦以配置档为准，内建仅作缺省。 */
+/**
+ * 配置档中单个规则条目：字段皆可覆盖；instructions 亦以配置档为准，内建仅作缺省。
+ * `question` 为问句库编号之引用（可选）：可解析则以库中 instructions/criteria 为准，
+ * 忽略本规则内联之两者；悬空则回退本规则内联字段。
+ */
 type RawRule = {
   id?: unknown;
+  question?: unknown;
   instructions?: unknown;
   criteria?: unknown;
   blockWhen?: unknown;
   threshold?: unknown;
   message?: unknown;
 };
+
+/** 问句库单条（_questions 之值）：label 仅供人读，一概忽略。 */
+type RawQuestion = { instructions?: unknown; criteria?: unknown; label?: unknown };
+
+/** 问句展开后之有效问句：语义同规则内联之 instructions/criteria。 */
+type Question = { instructions?: string; criteria?: { true?: string; false?: string } };
 
 type RawRuleSet = { agentDesc?: unknown; rules?: unknown };
 
@@ -201,6 +216,9 @@ export type LoadedRules = {
 /** 配置档顶层保留键：全局开关，不视作 agent 名。 */
 const GLOBAL_KEY = "_global";
 
+/** 配置档顶层保留键：共享问句库（规则以 question 引用其编号），不视作 agent 名。 */
+const QUESTIONS_KEY = "_questions";
+
 /** 配置档 criteria 之解析：唯取 true/false 两字符串字段；非法者静默弃之（fail-open），绝不阻断 */
 function parseCriteria(v: unknown): { true?: string; false?: string } | undefined {
   if (!v || typeof v !== "object") return undefined;
@@ -212,11 +230,35 @@ function parseCriteria(v: unknown): { true?: string; false?: string } | undefine
 }
 
 /**
+ * 问句库解析（fail-open）：库非对象或为数组、条目非对象、instructions 非字符串、criteria 非法
+ * 皆静默弃之，绝不致使整档解析失败。完全空白（既无 instructions 亦无 criteria）之条目亦弃。
+ * label 一概忽略（可存不可用）。
+ */
+function parseQuestions(v: unknown): Map<string, Question> {
+  const out = new Map<string, Question>();
+  if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [key, item] of Object.entries(v as Record<string, unknown>)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const o = item as RawQuestion;
+    const q: Question = {};
+    if (typeof o.instructions === "string") q.instructions = o.instructions;
+    const c = parseCriteria(o.criteria);
+    if (c) q.criteria = c;
+    if (q.instructions === undefined && q.criteria === undefined) continue;
+    out.set(key, q);
+  }
+  return out;
+}
+
+/**
  * 读配置档并按 agent→rule id 合并覆盖内建 RULE_SETS：
  * 已知 agent 之已知规则按字段覆盖（instructions 亦以配置档为准，内建仅作缺省），
  * JSON 中新 id 追加其后；JSON 中未知 agent 整组加入。
  * `_global: { auditProbabilities }` 为全局开关（缺省 false），控制审计行是否附 probs。
  * `_global: { trainingLog }` 为训练数据记录开关（缺省 false），控制是否追加 training.jsonl。
+ * `_questions` 为顶层共享问句库（同 `_global` 不视作 agent 名）：规则给 `question` 且编号可解析者，
+ * 以库中 instructions/criteria 为准并忽略该规则内联之两者；编号悬空或库中无此项则回退内联字段，
+ * 再无则 instructions 为空 → 检查时跳过（fail-open）。同文之条引同一编号，改则一处生效。
  * 任何读取/解析错误 → 静默返内建默认（fail-open）。
  */
 export function loadRuleSets(path: string): LoadedRules {
@@ -236,12 +278,13 @@ export function loadRuleSets(path: string): LoadedRules {
   const gObj = g && typeof g === "object" ? (g as Record<string, unknown>) : undefined;
   const auditProbabilities = gObj?.auditProbabilities === true;
   const trainingLog = gObj?.trainingLog === true;
+  const questions = parseQuestions((raw as Record<string, unknown>)[QUESTIONS_KEY]);
   const merged: Record<string, AgentRuleSet> = {};
   for (const [agent, rs] of Object.entries(RULE_SETS)) {
     merged[agent] = { agentDesc: rs.agentDesc, rules: rs.rules.map((r) => ({ ...r })) };
   }
   for (const [agent, cfg] of Object.entries(raw)) {
-    if (agent === GLOBAL_KEY) continue;
+    if (agent === GLOBAL_KEY || agent === QUESTIONS_KEY) continue;
     if (!cfg || typeof cfg !== "object") continue;
     const base = merged[agent];
     const order: RuleId[] = [];
@@ -251,6 +294,8 @@ export function loadRuleSets(path: string): LoadedRules {
       byId.set(r.id, { ...r });
     }
     const list: RawRule[] = Array.isArray(cfg.rules) ? (cfg.rules as RawRule[]) : [];
+    // 该 agent 内规则之 question 引用：同一 id 之后续条目若未再给 question 即视为解除引用
+    const refById = new Map<RuleId, string>();
     for (const item of list) {
       if (!item || typeof item !== "object" || typeof item.id !== "string") continue;
       const id = item.id as RuleId;
@@ -268,8 +313,20 @@ export function loadRuleSets(path: string): LoadedRules {
         message:
           typeof item.message === "string" ? item.message : prev?.message ?? `规则 ${id} 未通过`,
       };
+      if (typeof item.question === "string") refById.set(id, item.question);
+      else refById.delete(id);
       if (!byId.has(id)) order.push(id);
       byId.set(id, next);
+    }
+    // 问句展开（须在合并之后：仅给 question 之规则不得被内建 instructions/criteria 回填至生效）
+    for (const [id, qid] of refById) {
+      const q = questions.get(qid);
+      if (!q) continue; // 编号悬空/库中无此项 → 回退该规则内联（或内建缺省）字段
+      const rule = byId.get(id);
+      if (!rule) continue;
+      rule.instructions = q.instructions ?? "";
+      if (q.criteria) rule.criteria = q.criteria;
+      else delete rule.criteria;
     }
     merged[agent] = {
       agentDesc: typeof cfg.agentDesc === "string" ? cfg.agentDesc : base?.agentDesc ?? "",
