@@ -39,7 +39,7 @@ Rather not edit files by hand? Just ask pi to 配置 subagent 规则 — the bun
 
 Nothing to do — once installed and configured, every subagent dispatch is evaluated automatically. A blocked dispatch returns the violation list to the main agent.
 
-Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (full sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, `instructions` (the question asked of JEV), an optional `criteria` (`{true, false}` natural-language answer-branch guides passed through to JEV to disambiguate borderline questions), a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability), and a `message` (returned on violation). Rules are keyed by subagent name; only dispatches to a named agent are evaluated. A reserved top-level key `_global` holds global switches (e.g. `{ "auditProbabilities": true }`) and is not treated as an agent name. After editing, `/reload` in pi.
+Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (full sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, a `question` (the id of a shared entry in the top-level `_questions` library, e.g. `Q004`) — or, instead, inline `instructions` (the question asked of JEV) plus optional `criteria` (`{true, false}` natural-language answer-branch guides passed through to JEV to disambiguate borderline questions) — and a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability) and a `message` (returned on violation). The top-level `_questions` map holds one entry per distinct question, `{ label?, instructions, criteria? }`, where `label` is a human-readable note the code ignores; rules asking the same question all reference the same id, so they are edited in one place. A resolvable `question` wins over inline fields, an unknown id falls back to them, and a rule left with no question at all is skipped (fail-open). Rules are keyed by subagent name; only dispatches to a named agent are evaluated. The reserved top-level keys `_global` (global switches, e.g. `{ "auditProbabilities": true }`) and `_questions` are never treated as agent names. After editing, `/reload` in pi.
 
 Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp/audit.jsonl` (one JSON object per line).
 
@@ -139,7 +139,7 @@ JEV_AI_MODEL=可选之模型覆盖
 
 无需任何操作——装好配妥后，每次派单自动求值。被拦之派单将违规清单返予主 agent。
 
-规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（完整样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`instructions`（交 JEV 之问）、可选 `criteria`（`{true, false}` 答支判据，透传 JEV 以消歧含糊之问）、`blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。规则按 subagent 名分组；唯派单至具名 agent 方求值。顶层保留键 `_global` 存放全局开关（如 `{ "auditProbabilities": true }`），不视作 agent 名。改后于 pi 内 `/reload`。
+规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（完整样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`question`（指向顶层问句库 `_questions` 之编号，如 `Q004`）——或以 `instructions`（交 JEV 之问）＋可选 `criteria`（`{true, false}` 答支判据，透传 JEV 以消歧含糊之问）内联自持——另有 `blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。顶层 `_questions` 为「一问一条」之库，每项形如 `{ label?, instructions, criteria? }`，其中 `label` 仅供人读、代码一概忽略；凡同问之规则皆引同一编号，故改则一处生效。`question` 可解析者优先于内联字段，编号悬空则回退内联，两者皆无之规则被跳过（fail-open）。规则按 subagent 名分组；唯派单至具名 agent 方求值。顶层保留键 `_global`（全局开关，如 `{ "auditProbabilities": true }`）与 `_questions` 皆不视作 agent 名。改后于 pi 内 `/reload`。
 
 每次求值——放行或拦截——皆追加于 `~/.pi/agent/jev-comp/audit.jsonl`（每行一 JSON 对象）。
 

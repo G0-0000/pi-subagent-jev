@@ -32,7 +32,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 
 ## 第二步 · 定规则
 - **立则三纲**（2026-09-27 librarian 组实践定论）：
-  1. **能复用则复用**——跨 agent 同义之条（标的/决策/措辞之类）当逐字同文，优化时各组同步改；唯「改动/越权」之条因各 agent 工具白名单与写面各异不可强求（scout S2 原样套 librarian，「回写大脑」虚高 .91 误拦之鉴）。**复用前必以对方组测例互验，两侧全中方同文**；现成同文模板：标的条见 scout S1、决策条见 scout S3、措辞条见 worker W6（今 coder C4、librarian L4、reviewer RV3 皆与之同文）
+  1. **能复用则复用**——问句与判据已尽抽入顶层 `_questions` 问句库，各规则唯以编号（`Q0xx`）引之；凡语义同者**引同一编号**，改则一处生效、无须逐组逐字同步；规则自身仍各持 `blockWhen`/`threshold`/`message`（同一问句在不同 agent 可配不同阈）。唯「改动/越权」之条因各 agent 工具白名单与写面各异、豁免清单不同，不可强求同问（scout S2 原样套 librarian，「回写大脑」虚高 .91 误拦之鉴）。**改问句文本或新增问句后，必以相关各组测例互验，两侧全中方定**
   2. **能拆则拆**——一条规则唯问一事（标的、改动、决策、措辞各为一问），勿揉「任务合规与否」之大问；拆细则罪名单明、拦截文案知所中、阈值可分调
   3. **问句从简，criteria 详述**——instructions 唯朴素一问（如 "Does the task name a concrete question or topic to investigate?"），答支边界、豁免清单、误判场景皆挪 criteria 双支详陈
 
@@ -54,10 +54,10 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - **测试行勿混入训练档**：`_global.trainingLog` 为 `true` 时，测试求值亦记入 `training.jsonl`。测试毕宜跑仓库之 `scripts/prune-training.ts`（缺省 dry-run，`--write` 方落档并自动备份）——按现行规则档甄别，剔去以旧版 criteria 或临时 key 求值之行，唯留逐字相符之良性样本；`dispatch` 行一律保留
 
 ## 第四步 · 写配置
-遣 delegate 将规则组并入 `~/.pi/agent/jev-comp/compliance-rules.json`（顶层键＝agent 名；`_global` 为保留键勿动）。写前先读档，核对既有各组不被破坏。告用户 `/reload` 生效。
+**由主 agent 亲改** `~/.pi/agent/jev-comp/compliance-rules.json`（顶层键＝agent 名；保留键 `_global`、`_questions` 勿动）——prompt 与规则类之增删改概不假手 subagent。写前先读档，核对既有各组不被破坏；同义之问引同一编号，勿另起一条。告用户 `/reload` 生效。
 
 ## 配置档 schema 速查
-顶层键即 agent 名，下书 `agentDesc` 与 `rules` 数组；规则字段：`id`/`instructions`/`blockWhen`/`threshold`/`message`，另可选 `criteria`（`{true, false}` 答支判据，直透 JEV 以消歧）。`_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`。
+顶层键即 agent 名，下书 `agentDesc` 与 `rules` 数组；规则字段：`id`/`question`/`blockWhen`/`threshold`/`message`——`question` 为顶层问句库 `_questions` 之编号（`Q001`、`Q002`…，编号只增不退），库中每项形如 `{label?, instructions, criteria?}`（`label` 为中文简述，仅供人读，代码一概忽略）。规则亦可内联 `instructions` ＋可选 `criteria`（旧形，仍兼容）：`question` 可解析者优先，编号悬空则回退内联，再无则该规则被跳过（fail-open）。`_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`；`_global.trainingLog`（默认 false）开则训练档另记三元组。
 - below：概率 < 阈值则拦（正例，求达标有据）；above：概率 > 阈值则拦（反例，求犯忌有凭）
 - 拦截文案之首尾（「派单审核未通过…」/「请修正任务描述后重派。」）硬编码于扩展，唯 message 可配
 
