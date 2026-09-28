@@ -9,7 +9,8 @@
   "homepage": "https://github.com/G0-0000/pi-subagent-jev#readme",
   "bugs": "https://github.com/G0-0000/pi-subagent-jev/issues",
   "scripts": {
-    "test": "node --test jev/*.test.ts"
+    "test": "node --test jev/*.test.ts",
+    "prune-training": "node scripts/prune-training.ts"
   },
   "pi": {
     "extensions": ["./extensions/pi-subagent-jev.ts", "./extensions/orchestrator-main.ts"],
