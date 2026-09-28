@@ -266,3 +266,19 @@ test("⑳ eligibleDetailed：三态（无冷却/部分/全冷却保底）＋空�
   // (d) 空输入 → 空、fellBack false（绝不保底出首名）
   assert.deepEqual(tr.eligibleDetailed([], 0), { names: [], fellBack: false });
 });
+
+test("㉑ CooldownTracker：续期不缩短 —— 显式 nowMs 回拨不改早已置定之较晚 until", () => {
+  const tr = new CooldownTracker(() => 0, 1000);
+  tr.markFailure("a", true, 5000); // until = 6000
+  tr.markFailure("a", true, 0); // 早于既有：不回归 1000
+  assert.deepEqual(tr.eligible(["a", "b"], 5999), ["b"]); // 仍冷却至 6000
+  assert.deepEqual(tr.eligible(["a", "b"], 6000), ["a", "b"]); // 恰到期恢复
+});
+
+test("㉒ CooldownTracker：负时钟下未标记之名视为可选（哨兵 -Infinity，不误判冷却）", () => {
+  const tr = new CooldownTracker(() => -5000, 1000);
+  // 未标记：-Infinity 哨兵恒 ≤ 负时刻 → 可选，且不因全判冷却而走保底
+  assert.deepEqual(tr.eligibleDetailed(["a", "b"], -5000), { names: ["a", "b"], fellBack: false });
+  tr.markFailure("a", true, -5000); // until = -4000
+  assert.deepEqual(tr.eligibleDetailed(["a", "b"], -5000), { names: ["b"], fellBack: false });
+});

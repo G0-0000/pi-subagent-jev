@@ -139,6 +139,9 @@ export function classifyFailure(f: { httpStatus?: number; kind: string }): Failu
  * eligible 按原序过滤冷却中者，全在冷却时保底返回首个（绝不返回空链）。
  * eligibleDetailed 与 eligible 同逻辑，另报本次是否走了保底分支；eligible 委派之。
  * 纯内存 Map，重启即忘；时钟注入可测。
+ *
+ * 注意：链上仅一个 upstream 时，其一旦入冷却即「全链冷却」，每次调用皆走保底真发该名，
+ * 冷却窗对该唯一上游永不生效、仅余 audit 记录意义（现配两级无实害，防日后收缩为单级时误判冷却在起作用）。
  */
 export class CooldownTracker {
   private until = new Map<string, number>();
@@ -150,27 +153,36 @@ export class CooldownTracker {
     this.cooldownMs = cooldownMs;
   }
 
+  /**
+   * 记一次可冷却败北（其余分类直接忽略）。续期不缩短：与既有到期时刻取大者。
+   * 显式传入之 nowMs 胜过注入时钟（仅供测试）；生产调用方勿与注入时钟混用。
+   */
   markFailure(name: string, cooldownable: boolean, nowMs?: number): void {
     if (!cooldownable) return; // 429 与 4xx 绝不冷却
     const t = nowMs ?? this.now();
-    this.until.set(name, t + this.cooldownMs);
+    // 与既有到期取大者：显式回拨之 nowMs 不得意外缩短冷却（正常生产路径时钟单调，行为不变）
+    this.until.set(name, Math.max(this.until.get(name) ?? -Infinity, t + this.cooldownMs));
   }
 
   markSuccess(name: string): void {
     this.until.delete(name);
   }
 
+  /** 显式传入之 nowMs 胜过注入时钟（仅供测试）；生产调用方勿与注入时钟混用。 */
   eligible(names: string[], nowMs?: number): string[] {
     return this.eligibleDetailed(names, nowMs).names;
   }
 
-  /** 与 eligible 同语义，另报本次是否走保底分支（全在冷却而被迫返回首名）。 */
+  /**
+   * 与 eligible 同语义，另报本次是否走保底分支（全在冷却而被迫返回首名）。
+   * 显式传入之 nowMs 胜过注入时钟（仅供测试）；生产调用方勿与注入时钟混用。
+   */
   eligibleDetailed(
     names: string[],
     nowMs?: number
   ): { names: string[]; fellBack: boolean } {
     const t = nowMs ?? this.now();
-    const out = names.filter((n) => (this.until.get(n) ?? 0) <= t);
+    const out = names.filter((n) => (this.until.get(n) ?? -Infinity) <= t);
     if (out.length === 0 && names.length > 0) {
       return { names: [names[0]], fellBack: true }; // 全在冷却：保底首名
     }
