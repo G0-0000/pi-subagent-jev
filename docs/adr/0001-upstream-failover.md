@@ -27,3 +27,4 @@
 
 - audit 行之 `model` 字段取自上游响应体 `res.model`（`jev/compliance.ts`），非请求/配置 model 名。TypeSafe 端点对请求名 `jev-latest` 自报响应体 `"model":"jev-1.13.0"`（校准数据 38/38 行）——证实 `jev-latest` 现指向同一服役模型，audit 记 `jev-1.13.0` 与配置 `jev-latest` 并不矛盾。
 - 冷却中被跳过之首配 upstream 记入 audit `failover` 数组为 `{ name, kind: "cooldown" }`（无 status、无 ms，零请求）；胜者非首配 upstream 时 audit 行落 `upstream`/`failover` 键（胜者即成时仍不落），故「冷却跳过」与「旧单端点链路」在审计上可辨。
+- 全链冷却保底（2026-09-29）：`eligible()` 于全冷却时保底返首位，该次真发之尝试于 audit 标 `fallback: true`；成功保底之行携 `upstream` ＋ `fallback: true`、无 `failover` 数组（故「保底成功」与「首配一举即成」在审计上互辨）。保底失败只续该首级自身之钟，**不延长他级冷却**——曾有审查报「一次可恢复 5xx 实付 2×cooldownMs、链长 N 则 N×cooldownMs」，经以真实模块可执行复演证否。
