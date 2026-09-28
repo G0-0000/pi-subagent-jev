@@ -47,6 +47,8 @@ Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp
 
 Every audit line carries the constant fields `ts`, `agent`, `task_excerpt` (task truncated to 200 characters), `model`, `rules` and `verdict`, plus `latency_ms`. Conditionally: `blocked` (array of violating rule messages — only when the dispatch was blocked), `error` (fail-open error description), `probs` (rule id → raw probability, only when `_global.auditProbabilities` is `true`), and `upstream` + `failover` (only when a non-first configured upstream answered — a real switch or a cooldown skip; `failover` records carry `status` / `kind` / `ms` for failed attempts and `retryAfterMs` when a 429 reported `Retry-After`, while skipped levels are recorded as `{name, kind: "cooldown"}` with no `status`/`ms`). Rows where the whole chain failed carry the `failover` attempts alongside `error`, without `upstream`. API keys are never logged.
 
+A second reserved switch, `_global.trainingLog` (default `false`), records training triples for local decision-model fine-tuning: when `true`, every dispatch evaluation and every `jev_ask` call also appends one line to `~/.pi/agent/jev-comp/training.jsonl` — the full `state`, the `questions` asked, and the probabilities/answers returned — with `source` set to `"dispatch"` or `"ask"` respectively. Best-effort and fail-open; runtime data, never committed.
+
 ### Tools
 
 - `jev_ask` — parameters: `state` (the material text to evaluate), `questions` (a map of key → `{type, instructions}`), optional `model`.
@@ -88,7 +90,7 @@ If the JEV endpoint is unreachable or not configured, the API key is missing, or
 npm test
 ```
 
-Zero npm dependencies; runs on Node's built-in test runner (77 tests). To recalibrate the judge thresholds, see `scripts/calibrate.ts` (it issues real API requests, so it is not run by the tests).
+Zero npm dependencies; runs on Node's built-in test runner (89 tests). To recalibrate the judge thresholds, see `scripts/calibrate.ts` (it issues real API requests, so it is not run by the tests).
 
 ## License
 
@@ -145,6 +147,8 @@ JEV_AI_MODEL=可选之模型覆盖
 
 审计行恒有字段 `ts`、`agent`、`task_excerpt`（任务原文按码点截 ≤200 字）、`model`、`rules` 与 `verdict`，另有 `latency_ms`。条件性字段：`blocked`（命中拦截之规则文案数组——唯派单被拦时出现）、`error`（fail-open 之错误说明）、`probs`（规则 id → 原始概率，唯 `_global.auditProbabilities` 为 `true` 时附）、以及 `upstream` ＋ `failover`（唯胜者非首配 upstream 时附——真实切换或冷却跳过皆然；`failover` 记录对真实失败尝试携 `status` / `kind` / `ms`，429 上报 `Retry-After` 时另携 `retryAfterMs`，被跳过之级则记 `{name, kind: "cooldown"}`、无 `status`/`ms`）。全链败尽之行携 `failover` 历次尝试与 `error`，无 `upstream`。API key 绝不入日志。
 
+另一保留开关 `_global.trainingLog`（缺省 `false`）为本地决策模型微调记录训练三元组：为 `true` 时，每次派单求值与每次 `jev_ask` 调用皆另追加一行于 `~/.pi/agent/jev-comp/training.jsonl`——全量 `state`、所求 `questions` 与返回之概率/答案——`source` 分别为 `"dispatch"` 与 `"ask"`。尽力而为、fail-open；运行时数据，绝不入库。
+
 #### 工具
 
 - `jev_ask`——参数：`state`（待求值之材料文本）、`questions`（键 → `{type, instructions}` 之映射）、可选 `model`。
@@ -186,7 +190,7 @@ JEV 端点不可达或未配置、API key 缺失、规则档损坏时，派单�
 npm test
 ```
 
-零 npm 依赖，Node 内建测试器（77 条测试）。重校准判定阈值见 `scripts/calibrate.ts`（发真实 API 请求，故不入测试）。
+零 npm 依赖，Node 内建测试器（89 条测试）。重校准判定阈值见 `scripts/calibrate.ts`（发真实 API 请求，故不入测试）。
 
 ### 许可证
 
