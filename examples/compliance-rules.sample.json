@@ -1,105 +1,86 @@
 {
   "_global": { "auditProbabilities": false, "trainingLog": false },
   "_questions": {
-    "Q001": {
-      "label": "措辞含糊/越界",
-      "instructions": "Does the task contain ambiguous, contradictory, or misleading wording, or any statement that could invite the agent to wander beyond the stated task scope?",
-      "criteria": {
-        "true": "The wording is vague, self-contradictory, or invites work beyond the stated scope",
-        "false": "The wording is precise and the requested work stays within the stated scope"
-      }
-    },
     "G001": {
       "label": "任务目标明确（全局基线示例）",
       "instructions": "Does the task state a clear, concrete objective for the agent to accomplish?",
       "criteria": {
         "true": "The task names a concrete deliverable or outcome — what to produce, check, or report — and the agent can tell when it is done",
         "false": "The task is aimless or generic — 'take a look', 'check things out' — with no named objective or completion criterion"
-      }
+      },
+      "blockWhen": "below",
+      "threshold": 0.7,
+      "message": "任务目标不明——凡派单皆须给出明确标的"
+    },
+    "Q001": {
+      "label": "delegate 缺具体文件路径",
+      "instructions": "Does the task give at least one concrete, explicit file path to create or modify?",
+      "criteria": {
+        "true": "Answer true only if the agent can open or create the target file immediately from the task text alone: an explicit local path (absolute or relative), a path appearing inside pasted logs/errors/code, or a distinctive filename whose location is stated or obvious.",
+        "false": "Answer false if what is given is not a directly openable file: a directory only (even with instructions to invent the filename), a glob pattern (e.g. src/**/*.ts), a URL or repo reference that must be navigated or fetched, a pronoun or prior-context reference, or a file described only by its role or content."
+      },
+      "blockWhen": "below",
+      "threshold": 0.7,
+      "message": "任务未给出具体文件路径"
+    },
+    "Q002": {
+      "label": "delegate 缺确定内容",
+      "instructions": "Does the task provide the definite content or exact edits to apply, so the agent need not draft wording itself nor explore to fill gaps?",
+      "criteria": {
+        "true": "Answer true if the task supplies the actual content to write — verbatim text, exact old/new strings, a complete snippet — or instructions so specific that no wording or content decisions remain for the agent.",
+        "false": "Answer false if the agent must compose prose, choose wording, or invent content itself, e.g. 'add appropriate comments', 'write a summary', 'improve the description', even if the topic or outline is given."
+      },
+      "blockWhen": "below",
+      "threshold": 0.7,
+      "message": "任务无确定内容"
+    },
+    "Q003": {
+      "label": "delegate 无 shell 却须执行",
+      "instructions": "Does the task require the agent to execute shell commands, run builds, tests, scripts, or restart or verify services?",
+      "criteria": {
+        "true": "Answer true if the task instructs the agent itself to run, execute, build, test, commit, deploy, source, or restart something — any wording that makes command execution part of the agent's own job, including indirect phrasing like 'make sure the tests pass' or 'then commit the change'.",
+        "false": "Answer false if commands appear only as file content to be edited — e.g. adding an 'npm test' step to a CI config, writing an export line in .env/.bashrc, or editing a shell script. Editing a file that CONTAINS commands is not executing them. Commands mentioned as context, explicitly excluded, or assigned to someone else are also false."
+      },
+      "blockWhen": "above",
+      "threshold": 0.8,
+      "message": "任务要求执行 shell 命令/构建测试，delegate 无 bash 权限"
+    },
+    "Q004": {
+      "label": "delegate 须自行探索查资料",
+      "instructions": "Does the task require the agent to investigate, explore, or look up information that is not contained in the task itself?",
+      "criteria": {
+        "true": "Answer true if the task requires the agent to find information not contained in the task text — searching the codebase for the right file or location, reading logs or other files to determine what to change, or looking up external facts.",
+        "false": "Answer false if the task itself contains everything needed (paths, exact strings, content). Opening or reading the target file to apply a given edit is normal editing, not investigation."
+      },
+      "blockWhen": "above",
+      "threshold": 0.8,
+      "message": "任务要求 agent 自行探索查资料"
+    },
+    "Q005": {
+      "label": "缺执行方案/步骤",
+      "instructions": "Does the task include an execution plan or sufficiently precise steps for what to change?",
+      "criteria": {
+        "true": "Answer true if the task gives concrete steps, an explicit plan, a referenced SOP/plan document, or precise commands to run — including pure verification tasks (running tests, checking status) where the commands or checks are specified. A change artefact supplied with the task — a PR/MR description, an issue's body text, a review comment, or an approved diff — also counts when it states what to change. A task that itself names the concrete operation or operations to perform — 'delete node_modules and reinstall dependencies', 'rename X to Y across src/' — counts as concrete steps even when it is one sentence with no separate plan document.",
+        "false": "Answer false if the task only states a vague goal or problem and leaves the agent to figure out what to change or how to proceed. A bare ticket, issue, or PR number with no content of its own is not a basis."
+      },
+      "blockWhen": "below",
+      "threshold": 0.7,
+      "message": "任务无执行方案/步骤"
     }
   },
   "_all": {
-    "rules": [
-      {
-        "id": "G1",
-        "question": "G001",
-        "blockWhen": "below",
-        "threshold": 0.7,
-        "message": "任务目标不明——凡派单皆须给出明确标的"
-      }
-    ]
+    "rules": ["G001"]
   },
   "delegate": {
     "agentDesc": "a file-editing agent without shell access",
-    "rules": [
-      {
-        "id": "R1",
-        "instructions": "Does the task give at least one concrete, explicit file path to create or modify?",
-        "blockWhen": "below",
-        "threshold": 0.7,
-        "message": "任务未给出具体文件路径"
-      },
-      {
-        "id": "R2",
-        "instructions": "Does the task provide the definite content or exact edits to apply, so the agent need not draft wording itself nor explore to fill gaps?",
-        "blockWhen": "below",
-        "threshold": 0.7,
-        "message": "任务无确定内容"
-      },
-      {
-        "id": "R3",
-        "instructions": "Does the task require the agent to execute shell commands, run builds, tests, scripts, or restart or verify services?",
-        "blockWhen": "above",
-        "threshold": 0.8,
-        "message": "任务要求执行 shell 命令/构建测试，delegate 无 bash 权限"
-      },
-      {
-        "id": "R4",
-        "instructions": "Does the task require the agent to investigate, explore, or look up information that is not contained in the task itself?",
-        "blockWhen": "above",
-        "threshold": 0.8,
-        "message": "任务要求 agent 自行探索查资料"
-      }
-    ]
+    "rules": ["Q001", "Q002", "Q003", "Q004"]
   },
   "worker": {
-    "agentDesc": "a generic implementation worker",
-    "rules": [
-      {
-        "id": "W6",
-        "question": "Q001",
-        "blockWhen": "above",
-        "threshold": 0.7,
-        "message": "任务措辞含糊/易致误解或越界，请澄清后重派"
-      }
-    ]
+    "agentDesc": "an execution agent with shell access that implements approved plans/SOPs",
+    "rules": ["Q005"]
   },
   "coder": {
-    "agentDesc": "a coding agent (example: a second agent sharing question Q001)",
-    "rules": [
-      {
-        "id": "C4",
-        "question": "Q001",
-        "blockWhen": "above",
-        "threshold": 0.7,
-        "message": "任务措辞含糊/易致误解或越界，请澄清后重派"
-      }
-    ]
-  },
-  "reviewer": {
-    "agentDesc": "a code-review agent (example: custom agent with a new rule id)",
-    "rules": [
-      {
-        "id": "C1",
-        "instructions": "Does the task ask the agent to change public API signatures or break backwards compatibility?",
-        "criteria": {
-          "true": "The task requires renaming, removing, or changing the signature of a public API, or changing behavior that existing callers depend on",
-          "false": "The task only adds new code or changes internal implementation without affecting public APIs or observable behavior"
-        },
-        "blockWhen": "above",
-        "threshold": 0.6,
-        "message": "任务可能破坏向后兼容，需人工确认"
-      }
-    ]
+    "agentDesc": "a code-writing agent with shell access (example: the same question Q005 reused by another agent group)",
+    "rules": ["Q005"]
   }
 }

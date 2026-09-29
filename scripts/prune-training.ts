@@ -103,12 +103,12 @@ for (let i = 0; i < argv.length; i++) {
 }
 const rulesPath = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "compliance-rules.json");
 
-// ---- 现行规则：走 loadRuleSets（生效档合并内建），不另写 JSON 解析 ----
+// ---- 现行规则：走 loadRuleSets（配置档为唯一来源，v0.7.0 起无内建缺省），不另写 JSON 解析 ----
 let rulesParsed = true;
 try {
   JSON.parse(readFileSync(rulesPath, "utf8"));
 } catch {
-  rulesParsed = false; // 档缺/坏时 loadRuleSets 静默回内建默认，此时 ask 行会被大量误剔，须显式告警
+  rulesParsed = false; // 档缺/坏时 loadRuleSets 静默回空规则（RULE_SETS 恒空），此时 ask 行会被大量误剔，须显式告警
 }
 const loaded = loadRuleSets(rulesPath);
 const ruleMap = new Map<string, RuleEntry>();
@@ -262,7 +262,7 @@ function dumpGroups(title: string, map: Map<string, number>, cap = 20): void {
 P(`==== 甄别${write ? "＋落档" : " DRY-RUN（未写入）"} ====`);
 P(`规则档：${rulesPath}`);
 P(`训练档：${filePath}`);
-if (!rulesParsed) P(`警告：规则档缺或不可解析，loadRuleSets 已回内建默认——ask 行可能被大量误剔，请先修档再落档`);
+if (!rulesParsed) P(`警告：规则档缺或不可解析，loadRuleSets 已回空规则（内建已废）——ask 行可能被大量误剔，请先修档再落档`);
 P(`现行规则 id（${ruleMap.size}）：${[...ruleMap.keys()].join(", ")}`);
 P("");
 P("---- 总量 ----");
@@ -312,13 +312,13 @@ P("");
 
 // ---- 落档 ----
 if (write) {
-  // 硬闸：规则档缺/坏时 loadRuleSets 静默回内建默认（仅 delegate 一组且无 criteria），此时落档
+  // 硬闸：规则档缺/坏时 loadRuleSets 静默回空规则（RULE_SETS 恒空、v0.7.0 起无内建缺省），此时落档
   // 会把由配置档供给之 worker/scout/librarian 等 ask 行几乎全灭，故拒绝落档（dry-run 不受影响）。
   if (!rulesParsed) {
     console.error(
       "错误：规则档缺或不可解析，已拒绝落档。\n" +
         `  规则档：${rulesPath}\n` +
-        "  loadRuleSets 已回内建默认（仅 delegate 一组、且无 criteria），此时落档会把 worker/scout/" +
+        "  loadRuleSets 已回空规则（内建已废、无内建缺省），此时落档会把 worker/scout/" +
         "librarian 等由配置档供给之 ask 行大量误剔。\n" +
         "  请先修复规则档再重跑；仅查看统计请用 dry-run（不加 --write）。"
     );

@@ -227,27 +227,28 @@ test("⑪ 拦截判定边界：below 恰在阈值不拦、above 恰在阈值不�
   assert.equal(r2!.line.blocked, undefined);
 });
 
-test("⑫ loadRuleSets：配置档整组载入（新 agent 加入、字段缺省填齐）、新规则 id 追加", () => {
+test("⑫ loadRuleSets：自含问句解析成完整规则、message 缺省兜底、各 agent 组独立载入", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const p = path.join(dir, "rules.json");
   writeFileSync(
     p,
     JSON.stringify({
+      _questions: {
+        R1: {
+          instructions:
+            "Does the task give at least one concrete, explicit file path to create or modify?",
+          blockWhen: "below",
+          threshold: 0.95,
+          message: "R1 改过的消息",
+        },
+        R9: { instructions: "Is this rule ok?", blockWhen: "above", threshold: 0.5, message: "新规则" },
+        W1: { instructions: "Worker question?", blockWhen: "below", threshold: 0.4 },
+      },
       delegate: {
         agentDesc: "a file-editing agent without shell access",
-        rules: [
-          {
-            id: "R1",
-            instructions:
-              "Does the task give at least one concrete, explicit file path to create or modify?",
-            blockWhen: "below",
-            threshold: 0.95,
-            message: "R1 改过的消息",
-          },
-          { id: "R9", blockWhen: "above", threshold: 0.5, message: "新规则" },
-        ],
+        rules: ["R1", "R9"],
       },
-      worker: { agentDesc: "a generic worker", rules: [{ id: "R1", threshold: 0.4 }] },
+      worker: { agentDesc: "a generic worker", rules: ["W1"] },
     })
   );
   const rs = loadRuleSets(p);
@@ -259,10 +260,11 @@ test("⑫ loadRuleSets：配置档整组载入（新 agent 加入、字段缺省
   assert.equal(rs.agents.delegate.agentDesc, "a file-editing agent without shell access");
   assert.ok(rs.agents.delegate.rules.some((r) => r.id === "R9" && r.threshold === 0.5));
   assert.equal(rs.agents.worker.agentDesc, "a generic worker");
+  assert.equal(rs.agents.worker.rules[0].id, "W1");
   assert.equal(rs.agents.worker.rules[0].threshold, 0.4);
-  // 未给字段之缺省：blockWhen below、message 兜底
+  // 问句未给字段之缺省：blockWhen below、message 兜底
   assert.equal(rs.agents.worker.rules[0].blockWhen, "below");
-  assert.equal(rs.agents.worker.rules[0].message, "规则 R1 未通过");
+  assert.equal(rs.agents.worker.rules[0].message, "规则 W1 未通过");
 });
 
 test("⑬ loadRuleSets：档不存在／JSON 坏 → 静默返空（agents 空且 all 为 null，fail-open 至尽头）", () => {
@@ -286,7 +288,7 @@ test("⑭ loadRuleSets/_global：不视作 agent，auditProbabilities 解析，�
     on,
     JSON.stringify({
       _global: { auditProbabilities: true },
-      delegate: { rules: [{ id: "R1", threshold: 0.9 }] },
+      delegate: { rules: [] },
     })
   );
   const rsOn = loadRuleSets(on);
@@ -366,29 +368,34 @@ test("⑰ checkDispatch auditProbabilities：true → line.probs 含原始数值
   assert.ok(!("probs" in off!.line));
 });
 
-test("⑲ loadRuleSets：criteria 覆盖、prev 兜底与非法静默弃", () => {
+test("⑲ loadRuleSets：criteria 解析、非法静默弃（fail-open，不致问句整条失效）", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const p = path.join(dir, "rules.json");
   writeFileSync(
     p,
     JSON.stringify({
-      delegate: {
-        rules: [
-          { id: "R1", criteria: { true: "has path", false: "no path" } },
-          { id: "R2", criteria: "not-an-object" },
-          { id: "R9", criteria: { true: "only true side" } },
-        ],
+      _questions: {
+        R1: {
+          instructions: "Q1?",
+          blockWhen: "below",
+          threshold: 0.7,
+          criteria: { true: "has path", false: "no path" },
+        },
+        R2: { instructions: "Q2?", blockWhen: "below", threshold: 0.7, criteria: "not-an-object" },
+        R9: { instructions: "Q9?", blockWhen: "below", threshold: 0.5, criteria: { true: "only true side" } },
       },
+      delegate: { rules: ["R1", "R2", "R9"] },
     })
   );
   const rs = loadRuleSets(p);
   const r1 = rs.agents.delegate.rules.find((r) => r.id === "R1")!;
-  assert.deepEqual(r1.criteria, { true: "has path", false: "no path" }); // 配置档 criteria 覆盖
+  assert.deepEqual(r1.criteria, { true: "has path", false: "no path" }); // criteria 原样保留
   const r2 = rs.agents.delegate.rules.find((r) => r.id === "R2")!;
-  assert.equal(r2.criteria, undefined); // 内建无 criteria，且非法值静默弃之 → 仍无
+  assert.equal(r2.criteria, undefined); // 非法值静默弃之；问句本身仍有效（criteria 可选）
+  assert.equal(r2.instructions, "Q2?");
   const r9 = rs.agents.delegate.rules.find((r) => r.id === "R9")!;
   assert.deepEqual(r9.criteria, { true: "only true side" }); // 单边判据原样保留
-  // 内建未被就地改动
+  // fixture 未被就地改动
   assert.equal(DELEGATE.rules.find((r) => r.id === "R1")!.criteria, undefined);
 });
 
@@ -398,12 +405,16 @@ test("⑳ checkDispatch：配置档 criteria 一路透传至 askFn 载荷", asyn
   writeFileSync(
     p,
     JSON.stringify({
-      delegate: {
-        rules: [
-          { id: "R1", instructions: "Does the task name a path?", criteria: { true: "t", false: "f" } },
-          { id: "R2", instructions: "Second question?" },
-        ],
+      _questions: {
+        R1: {
+          instructions: "Does the task name a path?",
+          blockWhen: "below",
+          threshold: 0.7,
+          criteria: { true: "t", false: "f" },
+        },
+        R2: { instructions: "Second question?", blockWhen: "below", threshold: 0.7 },
       },
+      delegate: { rules: ["R1", "R2"] },
     })
   );
   const rs = loadRuleSets(p);
@@ -427,7 +438,7 @@ test("⑳ checkDispatch：配置档 criteria 一路透传至 askFn 载荷", asyn
   assert.equal(qs.R2.instructions, "Second question?");
 });
 
-test("⑱ checkDispatch：instructions 为空/空白的规则检查时跳过，不发问不拦", async () => {
+test("⑱ checkDispatch：instructions 为空/空白的规则检查时跳过，不发问不拦（防御性，载入侧已拦）", async () => {
   const ruleSets = {
     worker: {
       agentDesc: "a worker",
@@ -707,32 +718,27 @@ test("㊴ checkDispatch trainingLog：noul 非有限数（NaN/Infinity）→ 训
   assert.deepEqual(res.violations, []);
 });
 
-// ── 顶层共享问句库（_questions）＋ 规则 question 引用 ──
+// ── 自含问句库（_questions）＋ rules 引用解析 ──
 
-test("㊵ loadRuleSets/_questions：规则引 question → 展开为库中 instructions/criteria，并透传至 askFn 载荷", async () => {
+test("㊵ loadRuleSets/_questions：自含问句载入为完整规则，并透传至 askFn 载荷", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const p = path.join(dir, "rules.json");
   writeFileSync(
     p,
     JSON.stringify({
       _questions: {
-        Q001: {
-          label: "措辞含糊/越界",
+        W6: {
+          label: "措辞含糊/越界（human note, ignored）",
           instructions: "Does the task contain ambiguous wording or invite scope creep?",
           criteria: { true: "ambiguous", false: "clear" },
+          blockWhen: "above",
+          threshold: 0.7,
+          message: "W6 违规",
         },
       },
       worker: {
         agentDesc: "a worker",
-        rules: [
-          {
-            id: "W6",
-            question: "Q001",
-            blockWhen: "above",
-            threshold: 0.7,
-            message: "W6 违规",
-          },
-        ],
+        rules: ["W6"],
       },
     })
   );
@@ -741,9 +747,9 @@ test("㊵ loadRuleSets/_questions：规则引 question → 展开为库中 instr
   assert.equal(w6.instructions, "Does the task contain ambiguous wording or invite scope creep?");
   assert.deepEqual(w6.criteria, { true: "ambiguous", false: "clear" });
   assert.equal(w6.threshold, 0.7);
+  assert.equal(w6.blockWhen, "above");
   assert.equal(w6.message, "W6 违规");
-  assert.ok(!("question" in w6)); // 展开后不留引用痕
-  // 载荷与内联形无异
+  // 求值载荷与规则直写形无异
   let asked: any;
   const res = await checkDispatch("worker", TASK, {
     ruleSets: rs.agents,
@@ -759,73 +765,70 @@ test("㊵ loadRuleSets/_questions：规则引 question → 展开为库中 instr
   assert.deepEqual(res.violations, ["W6: W6 违规"]);
 });
 
-test("㊶ loadRuleSets：question 可解析 → 以库为准，忽略该规则内联之 instructions/criteria（亦不被内建值回填）", () => {
+test("㊶ loadRuleSets：非法问句整条弃（空白 instructions／坏 blockWhen／非有限 threshold），引之则静默无规则", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const p = path.join(dir, "rules.json");
   writeFileSync(
     p,
     JSON.stringify({
-      _questions: { Q001: { instructions: "库中之问", criteria: { true: "库 true" } } },
-      delegate: {
-        rules: [
-          {
-            id: "R1",
-            question: "Q001",
-            instructions: "内联之问（应被忽略）",
-            criteria: { false: "内联 false（应被忽略）" },
-            threshold: 0.5,
-          },
-        ],
+      _questions: {
+        Q1: { instructions: "   ", blockWhen: "below", threshold: 0.7 }, // 空白 instructions
+        Q2: { instructions: "Q2?", blockWhen: "sideways", threshold: 0.7 }, // 坏 blockWhen
+        Q3: { instructions: "Q3?", blockWhen: "below", threshold: NaN }, // 非有限 threshold
+        Q4: { instructions: "Q4?", blockWhen: "below" }, // 缺 threshold
+        Q5: { blockWhen: "below", threshold: 0.7 }, // 缺 instructions
+        Q6: { instructions: "有效", blockWhen: "above", threshold: Infinity }, // 非有限 threshold
+        OK: { instructions: "有效问句", blockWhen: "below", threshold: 0.5, message: "M" },
+        BAD: "not-an-object",
       },
-    })
-  );
-  const r1 = loadRuleSets(p).agents.delegate.rules.find((r) => r.id === "R1")!;
-  assert.equal(r1.instructions, "库中之问");
-  assert.deepEqual(r1.criteria, { true: "库 true" }); // 库中无 false 侧则无 false 侧，不回填内联
-  assert.notEqual(r1.instructions, DELEGATE.rules[0].instructions); // 未被内建缺省回填
-  assert.equal(r1.threshold, 0.5); // 阈值仍留规则自身
-});
-
-test("㊷ loadRuleSets：question 悬空 → 回退内联字段；再无内联则 instructions 空 → 检查时跳过（不拦不抛）", async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
-  const p = path.join(dir, "rules.json");
-  writeFileSync(
-    p,
-    JSON.stringify({
-      _questions: { Q001: { instructions: "库中之问" } },
-      worker: {
-        agentDesc: "a worker",
-        rules: [
-          {
-            id: "W1",
-            question: "Q404",
-            instructions: "内联之问",
-            blockWhen: "below",
-            threshold: 0.5,
-            message: "W1 违规",
-          },
-          { id: "W2", question: "Q404", blockWhen: "below", threshold: 0.5, message: "W2 违规" },
-        ],
-      },
+      worker: { rules: ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "OK", "BAD"] },
     })
   );
   const rs = loadRuleSets(p);
-  assert.equal(rs.agents.worker.rules.find((r) => r.id === "W1")!.instructions, "内联之问");
-  assert.equal(rs.agents.worker.rules.find((r) => r.id === "W2")!.instructions, ""); // 悬空且无内联 → 空
-  // 空 instructions 之规则循既有 fail-open：不发问、不进审计、不拦
-  const res = await checkDispatch("worker", TASK, {
-    ruleSets: rs.agents,
-    askFn: async (params) => {
-      assert.deepEqual(Object.keys(params.questions), ["W1"]);
-      return { model: "m", answers: { W1: { noul: 0.9 } }, usage: {} };
-    },
-  });
-  assert.ok(res);
-  assert.deepEqual(Object.keys(res.line.rules!), ["W1"]);
-  assert.deepEqual(res.violations, []);
+  assert.deepEqual(rs.agents.worker.rules.map((r) => r.id), ["OK"]); // 唯有效者存
+  assert.equal(rs.agents.worker.rules[0].instructions, "有效问句");
 });
 
-test("㊸ loadRuleSets：同一语义之内联形与引用形两档，解析后逐 agent 逐 rule 六字段全等", () => {
+test("㊶-补 loadRuleSets：threshold 真为非有限数（JSON.parse 得 Infinity）→ Number.isFinite 守卫弃之", () => {
+  // JSON.stringify 会把 NaN/Infinity 序列化为 null，被 typeof !== "number" 守卫拦下，
+  // Number.isFinite 分支实则未覆盖。此处直写原始 JSON 文本，用 1e999 让
+  // JSON.parse 产出真 Infinity（IEEE 754 上溢），直达 isFinite 守卫。
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const p = path.join(dir, "rules.json");
+  writeFileSync(
+    p,
+    `{ "worker": { "agentDesc": "a worker", "rules": ["OVERFLOW"] },
+       "_questions": { "OVERFLOW": { "instructions": "问?", "blockWhen": "below", "threshold": 1e999 } } }`
+  );
+  const rs = loadRuleSets(p);
+  assert.deepEqual(rs.agents.worker.rules, []); // 非有限 threshold → 整条弃；引用之 → 组无规则
+});
+
+test("㊷ loadRuleSets：rules 引用项非字符串／未知 id／同组重复 → 皆静默弃（保首个、保序）；rules 非数组 → 无规则", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const p = path.join(dir, "rules.json");
+  writeFileSync(
+    p,
+    JSON.stringify({
+      _questions: {
+        A: { instructions: "A?", blockWhen: "below", threshold: 0.5, message: "Ma" },
+        B: { instructions: "B?", blockWhen: "below", threshold: 0.5, message: "Mb" },
+      },
+      worker: {
+        rules: ["A", 42, { id: "A" }, "MISSING", "B", "A", "A"], // 非字符串/未知 id/重复项皆弃
+      },
+      ghost: { agentDesc: "g", rules: "not-an-array" }, // 非数组 → 无规则
+    })
+  );
+  const rs = loadRuleSets(p);
+  // 重复引用保首个、保序；唯未知/非字符串项弃之
+  assert.deepEqual(rs.agents.worker.rules.map((r) => r.id), ["A", "B"]);
+  assert.equal(rs.agents.ghost.agentDesc, "g");
+  assert.deepEqual(rs.agents.ghost.rules, []); // 非数组 rules → 无规则
+  // 旧版对象形 {id, question} 不再支持：对象项即非字符串 → 弃（上例已覆盖，此处证 agentDesc 同组共存）
+});
+
+test("㊸ loadRuleSets：同一规则之内联自含形与 id 引用形两档，解析后逐 agent 逐 rule 六字段全等", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const pick = (rs: ReturnType<typeof loadRuleSets>) =>
     Object.fromEntries(
@@ -843,122 +846,120 @@ test("㊸ loadRuleSets：同一语义之内联形与引用形两档，解析后�
         },
       ])
     );
-  const oldP = path.join(dir, "old.json");
+  const inlineP = path.join(dir, "inline.json");
   writeFileSync(
-    oldP,
+    inlineP,
     JSON.stringify({
       reviewer: {
         agentDesc: "a reviewer",
-        rules: [
-          {
-            id: "C1",
-            instructions: "Does the task break backwards compatibility?",
-            criteria: { true: "t", false: "f" },
-            blockWhen: "above",
-            threshold: 0.6,
-            message: "C1 违规",
-          },
-          {
-            id: "C2",
-            instructions: "Does the task name a concrete file path?",
-            blockWhen: "below",
-            threshold: 0.7,
-            message: "C2 违规",
-          },
-        ],
+        rules: ["C1", "C2"],
+      },
+      _questions: {
+        C1: {
+          instructions: "Does the task break backwards compatibility?",
+          criteria: { true: "t", false: "f" },
+          blockWhen: "above",
+          threshold: 0.6,
+          message: "C1 违规",
+        },
+        C2: {
+          instructions: "Does the task name a concrete file path?",
+          blockWhen: "below",
+          threshold: 0.7,
+          message: "C2 违规",
+        },
       },
     })
   );
-  const newP = path.join(dir, "new.json");
+  const refP = path.join(dir, "ref.json");
   writeFileSync(
-    newP,
+    refP,
     JSON.stringify({
       _questions: {
         Q001: {
           label: "向后兼容",
           instructions: "Does the task break backwards compatibility?",
           criteria: { true: "t", false: "f" },
+          blockWhen: "above",
+          threshold: 0.6,
+          message: "C1 违规",
         },
-        Q002: { instructions: "Does the task name a concrete file path?" },
+        Q002: {
+          instructions: "Does the task name a concrete file path?",
+          blockWhen: "below",
+          threshold: 0.7,
+          message: "C2 违规",
+        },
       },
       reviewer: {
         agentDesc: "a reviewer",
-        rules: [
-          { id: "C1", question: "Q001", blockWhen: "above", threshold: 0.6, message: "C1 违规" },
-          { id: "C2", question: "Q002", blockWhen: "below", threshold: 0.7, message: "C2 违规" },
-        ],
+        rules: ["Q001", "Q002"],
       },
     })
   );
-  assert.deepEqual(pick(loadRuleSets(newP)), pick(loadRuleSets(oldP)));
+  assert.deepEqual(pick(loadRuleSets(refP)), pick(loadRuleSets(inlineP)));
 });
 
-test("㊹ loadRuleSets：_questions 不视作 agent；非法 _questions 值/条目静默弃（fail-open）", () => {
+test("㊹ loadRuleSets：_questions 不视作 agent；非法 _questions 值静默弃（fail-open）", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
-  // 库整体非法（非对象）：问句尽弃，引用悬空 → 回退内联/内建缺省，且不抛
+  // 库整体非法（非对象）：问句尽弃，引之 → 组无规则，且不抛
   const p1 = path.join(dir, "q-not-object.json");
   writeFileSync(
     p1,
     JSON.stringify({
       _questions: 42,
-      delegate: { rules: [{ id: "R1", question: "Q001" }] },
+      delegate: { rules: ["Q001"] },
     })
   );
   const rs1 = loadRuleSets(p1);
   assert.equal(rs1.agents["_questions"], undefined); // 不视作 agent
   assert.equal(rs1.agents["_global"], undefined); // _global 同例
   assert.equal(rs1.agents["_all"], undefined); // _all 同例
-  assert.equal(
-    rs1.agents.delegate.rules.find((r) => r.id === "R1")!.instructions,
-    "" // v0.7.0 起无内建缺省：悬空引用且无内联 → instructions 空 → 检查时跳过
-  );
-  // 库中逐条非法：非对象条目、instructions 非字符串、空条目、criteria 非法 → 皆弃
+  assert.deepEqual(rs1.agents.delegate.rules, []); // 问句尽弃 → 无规则
+  // 库中逐条非法：非对象条目、缺三硬性条件者 → 皆弃；合法者照常载入
   const p2 = path.join(dir, "q-bad-items.json");
   writeFileSync(
     p2,
     JSON.stringify({
       _questions: {
         Q1: "not-an-object",
-        Q2: { instructions: 123 },
-        Q3: { label: "only label" },
-        Q4: { criteria: "bad" },
+        Q2: { instructions: 123, blockWhen: "below", threshold: 0.5 },
+        Q3: { instructions: "Q3?", label: "only label + 非法 criteria 亦不效救" },
+        // criteria 非法仅弃 criteria 本身，问句仍有效（可选字段，同 ⑲）
+        Q4: { criteria: "bad", instructions: "有问", blockWhen: "above", threshold: 0.9, message: "M" },
+        OK: { instructions: "有效问句", blockWhen: "above", threshold: 0.9, message: "M" },
       },
-      worker: {
-        agentDesc: "a worker",
-        rules: [
-          {
-            id: "W1",
-            question: "Q2",
-            instructions: "内联之问",
-            blockWhen: "below",
-            threshold: 0.5,
-            message: "W1 违规",
-          },
-        ],
-      },
+      worker: { agentDesc: "a worker", rules: ["Q4", "OK"] },
     })
   );
   const rs2 = loadRuleSets(p2);
   assert.equal(rs2.agents["_questions"], undefined);
-  assert.equal(rs2.agents.worker.rules[0].instructions, "内联之问"); // 问句被弃 → 回退内联
-  assert.equal(rs2.agents.worker.rules[0].criteria, undefined);
+  assert.deepEqual(rs2.agents.worker.rules.map((r) => r.id), ["Q4", "OK"]); // 非法者弃、引之无规则；合法者存
+  assert.equal(rs2.agents.worker.rules[0].criteria, undefined); // 非法 criteria 静默弃，问句仍有效
 });
 
 // ── `_all` 全局规则组 ──
 
-test("㊺ loadRuleSets/_all：解析为 LoadedRules.all；_all 不视作 agent；_global/_questions 不受影响", () => {
+test("㊺ loadRuleSets/_all：字符串引用解析为 LoadedRules.all；_all 不视作 agent；_global/_questions 不受影响", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const p = path.join(dir, "rules.json");
   writeFileSync(
     p,
     JSON.stringify({
       _global: { auditProbabilities: true },
-      _questions: { Q001: { instructions: "库中之问" } },
+      _questions: {
+        G1: {
+          instructions: "库中之问",
+          blockWhen: "above",
+          threshold: 0.5,
+          message: "G1 违规",
+        },
+      },
       _all: {
         agentDesc: "此处不应被读",
-        rules: [{ id: "G1", question: "Q001", blockWhen: "above", threshold: 0.5, message: "G1 违规" }],
+        rules: ["G1"],
       },
-      worker: { agentDesc: "a worker", rules: [{ id: "W1", instructions: "W?" }] },
+      worker: { agentDesc: "a worker", rules: ["W1"] },
     })
   );
   const rs = loadRuleSets(p);
@@ -968,7 +969,7 @@ test("㊺ loadRuleSets/_all：解析为 LoadedRules.all；_all 不视作 agent�
     [
       {
         id: "G1",
-        instructions: "库中之问", // question 引用已展开
+        instructions: "库中之问",
         blockWhen: "above",
         threshold: 0.5,
         message: "G1 违规",
@@ -987,29 +988,30 @@ test("㊻ loadRuleSets/_all：缺档无此键 → all 为 null；值非法（字
   assert.equal(loadRuleSets(none).all, null);
   assert.equal(loadRuleSets(none).agents["_all"], undefined);
 
-  // 条目无 id → 静默弃；弃尽 → all 为 null
+  // 引用项坏 → 静默弃；弃尽 → all 为 null
   const bad = path.join(dir, "bad.json");
   writeFileSync(
     bad,
     JSON.stringify({
       _all: "not-an-object",
-      worker: { agentDesc: "a worker", rules: [{ id: "W1", instructions: "W?" }] },
+      worker: { agentDesc: "a worker", rules: [] },
     })
   );
   const rsBad = loadRuleSets(bad);
   assert.equal(rsBad.all, null);
   assert.ok(rsBad.agents.worker); // 他组照常载入（fail-open）
 
-  const badEntries = path.join(dir, "bad-entries.json");
+  const badRefs = path.join(dir, "bad-refs.json");
   writeFileSync(
-    badEntries,
+    badRefs,
     JSON.stringify({
-      _all: { rules: ["not-an-object", { instructions: "无 id" }, { id: 42 }, { id: "G1", instructions: "有效" }] },
+      _questions: { G1: { instructions: "有效", blockWhen: "below", threshold: 0.5, message: "M" } },
+      _all: { rules: [42, "MISSING", { id: "X" }, "G1"] }, // 非字符串/未知/对象项皆弃，唯字符串有效引用存
     })
   );
-  const rsEntries = loadRuleSets(badEntries);
-  assert.ok(rsEntries.all);
-  assert.deepEqual(rsEntries.all.rules.map((r) => r.id), ["G1"]);
+  const rsRefs = loadRuleSets(badRefs);
+  assert.ok(rsRefs.all);
+  assert.deepEqual(rsRefs.all.rules.map((r) => r.id), ["G1"]);
 });
 
 test("㊼ checkDispatch：_all 与 agent 组并成一次请求（全局在前、agent 在后），blocked/violations 携全局 id", async () => {
@@ -1044,17 +1046,25 @@ test("㊼ checkDispatch：_all 与 agent 组并成一次请求（全局在前、
   assert.deepEqual(res.line.blocked, ["G1", "G2", "W1"]);
 });
 
-test("㊽ checkDispatch：id 冲突 → agent 规则整条顶替全局规则（后者弃之，静默）", async () => {
+test("㊽ checkDispatch：同 id 既列 _all 又列组内 → 去重（全局在前），同一问句仅求值一次", async () => {
+  // v0.8.0：问句自含后同一 id 即同一问句（同 instructions/threshold/message），
+  // 无「agent 胜出」语义 —— 简单去重，重复引用不致重复发问
   const ruleSets = {
     worker: {
       agentDesc: "a worker",
-      rules: [{ id: "G1", instructions: "agent 版之问", blockWhen: "below" as const, threshold: 0.5, message: "agent 版违规" }],
+      // ruleSets 类型为 Record<string, AgentRuleSet>（rules: RuleConfig[]）——此处须塞真
+      // RuleConfig 而非问句 id 字符串：字符串无 instructions，会被 checkDispatch 之
+      // 空白 instructions 过滤器静默弃，agent 侧 G1 副本不存在，去重分支实则未走到。
+      // 唯塞与 _all 同 id 之合法 RuleConfig，下方断言才真验「同 id 去重」。
+      rules: [
+        { id: "G1", instructions: "同一问句", blockWhen: "below" as const, threshold: 0.9, message: "同一违规" },
+      ],
     },
   };
   const allRules: AgentRuleSet = {
     agentDesc: "",
     rules: [
-      { id: "G1", instructions: "全局版之问", blockWhen: "below" as const, threshold: 0.9, message: "全局版违规" },
+      { id: "G1", instructions: "同一问句", blockWhen: "below" as const, threshold: 0.9, message: "同一违规" },
       { id: "G2", instructions: "G2?", blockWhen: "below" as const, threshold: 0.5, message: "G2 违规" },
     ],
   };
@@ -1068,12 +1078,13 @@ test("㊽ checkDispatch：id 冲突 → agent 规则整条顶替全局规则（�
     };
   };
   const res = await checkDispatch("worker", TASK, { askFn, ruleSets, allRules });
-  assert.deepEqual(Object.keys(questions), ["G2", "G1"]); // 未撞之全局规则在前（_all 序），agent 组规则在后（组内序）；G1 仅一份
-  assert.equal(questions.G1.instructions, "agent 版之问"); // agent 规则胜出（全局版被弃）
+  assert.deepEqual(Object.keys(questions), ["G1", "G2"]); // 去重以全局在前：G1 仍居 _all 序（首位），G2 随后；agent 组重复引用被弃
+  assert.equal(Object.keys(questions).length, 2); // G1 仅一份，无重复问句
+  assert.equal(questions.G1.instructions, "同一问句");
   assert.ok(res);
-  assert.deepEqual(res.violations, ["G2: G2 违规", "G1: agent 版违规"]); // G1 用 agent 版之 message/threshold（0.3<0.5 命中）；G2 0.3<0.5 亦命中
-  assert.deepEqual(res.line.blocked, ["G2", "G1"]);
-  assert.deepEqual(Object.keys(res.line.rules!), ["G2", "G1"]);
+  assert.deepEqual(res.violations, ["G1: 同一违规", "G2: G2 违规"]); // G1 仅计一次（0.3<0.9 命中一次）
+  assert.deepEqual(res.line.blocked, ["G1", "G2"]);
+  assert.deepEqual(Object.keys(res.line.rules!), ["G1", "G2"]);
 });
 
 test("㊾ checkDispatch：无专属组之 agent ＋ _all → 受查，agentDesc 写死 a sub-agent（_all.agentDesc 不读）", async () => {
@@ -1096,7 +1107,7 @@ test("㊾ checkDispatch：无专属组之 agent ＋ _all → 受查，agentDesc 
   assert.deepEqual(res.line.rules, { G1: "pass" });
 });
 
-test("㊿ checkDispatch：无组无 _all → null；_all 全为空白 instructions → null；agent 组空白但 _all 有效 → 仍查", async () => {
+test("㊿ checkDispatch：无组无 _all → null；_all 全为空白 instructions → null（防御路径）；agent 组空白但 _all 有效 → 仍查", async () => {
   let called = 0;
   const askFn: AskFn = async () => {
     called++;
@@ -1133,26 +1144,25 @@ test("㊿ checkDispatch：无组无 _all → null；_all 全为空白 instructio
   assert.deepEqual(Object.keys(r3.line.rules!), ["G1"]);
 });
 
-test("㊿b checkDispatch：_all 之 question 悬空且无内联 → 检查时跳过（fail-open，不拦不抛）", async () => {
+test("㊿b checkDispatch：_all 之问句若被弃（非法）→ 引用静默消失，检查时跳过（fail-open，不拦不抛）", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
   const p = path.join(dir, "rules.json");
   writeFileSync(
     p,
     JSON.stringify({
-      _questions: { Q001: { instructions: "库中之问" } },
-      _all: {
-        rules: [
-          { id: "G1", question: "Q001", blockWhen: "below", threshold: 0.5, message: "G1 违规" },
-          { id: "G2", question: "Q404", blockWhen: "below", threshold: 0.5, message: "G2 违规" },
-        ],
+      _questions: {
+        G1: { instructions: "库中之问", blockWhen: "below", threshold: 0.5, message: "G1 违规" },
+        // G2 无 instructions → 整条被弃（v0.8.0 自含语义：非法问句在载入侧消失）
+        G2: { blockWhen: "below", threshold: 0.5, message: "G2 违规" },
+        W1: { instructions: "W?", blockWhen: "below", threshold: 0.7, message: "W1 违规" },
       },
-      worker: { agentDesc: "a worker", rules: [{ id: "W1", instructions: "W?" }] },
+      _all: { rules: ["G1", "G2"] },
+      worker: { agentDesc: "a worker", rules: ["W1"] },
     })
   );
   const rs = loadRuleSets(p);
   assert.ok(rs.all);
-  assert.equal(rs.all.rules.find((r) => r.id === "G1")!.instructions, "库中之问"); // 引用可解析
-  assert.equal(rs.all.rules.find((r) => r.id === "G2")!.instructions, ""); // 悬空且无内联 → 空
+  assert.deepEqual(rs.all.rules.map((r) => r.id), ["G1"]); // 非法问句整条弃 → 引用静默消失
   const askFn: AskFn = async (params) => {
     assert.deepEqual(Object.keys(params.questions), ["G1", "W1"]); // G2 跳过
     return { model: "m", answers: { G1: { noul: 0.9 }, W1: { noul: 0.9 } }, usage: {} };
@@ -1163,9 +1173,9 @@ test("㊿b checkDispatch：_all 之 question 悬空且无内联 → 检查时跳
   assert.deepEqual(res.violations, []);
 });
 
-test("㊿c checkDispatch：agent 规则同 id 顶替 _all 且 agent 版 instructions 空白 → 全局版整条弃之、id 不入 questions（设计行为，勿『修复』）", async () => {
-  // 设计行为：id 冲突先整条顶替（全局版弃之），再空白过滤；故 agent 版空白时该 id 整个消失，
-  // 而非回退到全局版之问。勿误判为 bug 而改回「冲突时保留全局版」。
+test("㊿c checkDispatch：agent 组注入同 id 而不同文之规则（防御路径）→ 去重保全局版，id 不重复入问句包", async () => {
+  // 载入侧同 id 即同一问句，去重无歧义；唯测试可直接注入 ruleSets（防御路径）时
+  // 同 id 两版并存 —— 语义定为全局在前去重（保全局版），与载入后引用同 id 之行为一致。
   let called = 0;
   const captured: Record<string, any> = {};
   const askFn: AskFn = async (params) => {
@@ -1173,23 +1183,25 @@ test("㊿c checkDispatch：agent 规则同 id 顶替 _all 且 agent 版 instruct
     Object.assign(captured, params.questions);
     return { model: "m", answers: {}, usage: {} };
   };
-  // agent 规则同 id 而 instructions 空白：顶替＋过滤后无有效规则 → null 且不发请求
-  const blankAgent = {
+  // agent 组同 id 规则（防御注入）：去重后仅全局版有效 → 仍发问
+  const agentSet = {
     worker: {
       agentDesc: "a worker",
-      rules: [{ id: "G1", instructions: "  ", blockWhen: "below" as const, threshold: 0.5, message: "x" }],
+      rules: [{ id: "G1", instructions: "agent 版之问", blockWhen: "below" as const, threshold: 0.5, message: "agent 版违规" }],
     },
   };
   const allRules: AgentRuleSet = {
     agentDesc: "",
     rules: [{ id: "G1", instructions: "全局版之问", blockWhen: "below" as const, threshold: 0.9, message: "全局版违规" }],
   };
-  const r1 = await checkDispatch("worker", TASK, { askFn, ruleSets: blankAgent, allRules });
-  assert.equal(r1, null);
-  assert.equal(called, 0); // 唯一有效规则被滤空 → checkDispatch 返 null，不问询
+  const r1 = await checkDispatch("worker", TASK, { askFn, ruleSets: agentSet, allRules });
+  assert.ok(r1);
+  assert.equal(called, 1); // 去重后 G1 仍有效（全局版），照常发问
+  assert.equal(captured.G1.instructions, "全局版之问"); // 全局在前去重，保全局版
 
-  // 另设一条不冲突的全局规则：仅证冲突 id 不入 questions，其余照常
+  // 另证：id 唯一入问句包，无重复键（对象键天然唯一，此处证 blocked/violations 亦仅一份）
   called = 0;
+  for (const k of Object.keys(captured)) delete captured[k];
   const allRules2: AgentRuleSet = {
     agentDesc: "",
     rules: [
@@ -1197,10 +1209,23 @@ test("㊿c checkDispatch：agent 规则同 id 顶替 _all 且 agent 版 instruct
       { id: "G2", instructions: "G2?", blockWhen: "below" as const, threshold: 0.5, message: "G2 违规" },
     ],
   };
-  const res = await checkDispatch("worker", TASK, { askFn, ruleSets: blankAgent, allRules: allRules2 });
+  const res = await checkDispatch("worker", TASK, {
+    askFn: async (params) => {
+      called++;
+      Object.assign(captured, params.questions);
+      return {
+        model: "m",
+        answers: Object.fromEntries(Object.keys(params.questions).map((k) => [k, { noul: 0.3 }])),
+        usage: {},
+      };
+    },
+    ruleSets: agentSet,
+    allRules: allRules2,
+  });
   assert.ok(res);
   assert.equal(called, 1);
-  assert.ok(!("G1" in captured)); // 整条顶替＋空白过滤：G1 不应回退到全局版，不入问句包
-  assert.equal(captured.G2.instructions, "G2?");
-  assert.deepEqual(Object.keys(res.line.rules!), ["G2"]);
+  assert.deepEqual(Object.keys(captured), ["G1", "G2"]); // 去重以全局在前：G1 居 _all 序首位，agent 组重复引用被弃；各仅一份
+  assert.equal(captured.G1.instructions, "全局版之问");
+  assert.deepEqual(res.violations, ["G1: 全局版违规", "G2: G2 违规"]); // G1 保全局版（0.3<0.9 命中）
+  assert.deepEqual(res.line.blocked, ["G1", "G2"]);
 });

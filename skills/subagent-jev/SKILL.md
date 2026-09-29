@@ -34,7 +34,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 
 ## 第二步 · 定规则
 - **立则三纲**（2026-09-27 librarian 组实践定论）：
-  1. **能复用则复用**——问句与判据已尽抽入顶层 `_questions` 问句库，各规则唯以编号（`Q0xx`）引之；凡语义同者**引同一编号**，改则一处生效、无须逐组逐字同步；规则自身仍各持 `blockWhen`/`threshold`/`message`（同一问句在不同 agent 可配不同阈）。唯「改动/越权」之条因各 agent 工具白名单与写面各异、豁免清单不同，不可强求同问（scout S2 原样套 librarian，「回写大脑」虚高 .91 误拦之鉴）。**改问句文本或新增问句后，必以相关各组测例互验，两侧全中方定**
+  1. **能复用则复用**——问句自含判法（正文/criteria/向性/阈值/文案同居一条），各组 `rules` 唯列问句编号；凡语义与判法皆同者**引同一编号**，改则一处生效。若同问须异判法（异阈/异文案），即非同问——当分立两条问句。万一归并旧条遇参数不一，取**最易通过**者（宁宽勿枉，fail-open）：above 取大阈、below 取小阈（使拦区最窄），文案并为通用辞；向性相左属病态，持回人工。唯「改动/越权」之问因各 agent 工具白名单与写面各异、豁免清单不同，不可强求同问（scout S2 原样套 librarian，「回写大脑」虚高 .91 误拦之鉴）。**改问句后，必以引用各组之测例互验，全中方定**
   2. **能拆则拆**——一条规则唯问一事（标的、改动、决策、措辞各为一问），勿揉「任务合规与否」之大问；拆细则罪名单明、拦截文案知所中、阈值可分调
   3. **问句从简，criteria 详述**——instructions 唯朴素一问（如 "Does the task name a concrete question or topic to investigate?"），答支边界、豁免清单、误判场景皆挪 criteria 双支详陈
 
@@ -42,8 +42,8 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - 反例（越权/破坏/误导措辞）→ `blockWhen: "above"`，默认阈 0.8
 - `instructions` 用英文问句（答为 0–1 概率）；`message` 用中文短语
 - `criteria` 可选：`true`/`false` 各一句英文判据，划清答支边界（实测可移概率 0.4–0.7）。写法要诀：**须提供问句未载之边界信息**——纯复述问句定义者无效（分数纹丝不动，W5 首稿之鉴）；`false` 支列举常见误判场景最见效（如「执行已定方案之战术裁量不算决策」「删 node_modules/dist 之类可逆日常操作不算破坏」「任务文中已带批准语不算无确认」）。问句含糊、裸问置信度飘忽或贴线时用之
-- 规则 id 任意字符串，建议系以前缀字母（如 worker 用 W 系）
-- **全局基线规则入 `_all` 组**（顶层保留键，凡派单皆查——含无专属组之 agent，其 state 述语写死 "a sub-agent"）；全局规则号与问句号以 `G` 冠之（`G1`…/`G001`…），与各 agent 专属组**禁同 id**（万一相撞，agent 专属静默优先，不报错）
+- 问句编号任意字符串：agent 专属问以 `Q` 冠（`Q001`…，只增不退），全局问以 `G` 冠（`G001`…）
+- **全局基线问列入 `_all` 组之 `rules` 编号数组**（顶层保留键，凡派单皆查——含无专属组之 agent，其 state 述语写死 "a sub-agent"）；`rules` 为问句号字符串数组，全局与组引同号时去重（全局在前），一问号唯一定义其判法
 - **先呈中文对照表（id/向性/问句中译/阈值/拦截文案）候用户首肯**，再动下一步
 
 ## 第三步 · 测规则（裸问 vs criteria 对比测试）
@@ -57,13 +57,16 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - **测试行勿混入训练档**：`_global.trainingLog` 为 `true` 时，测试求值亦记入 `training.jsonl`。测试毕宜跑仓库之 `scripts/prune-training.ts`（缺省 dry-run，`--write` 方落档并自动备份）——按现行规则档甄别，剔去以旧版 criteria 或临时 key 求值之行，唯留逐字相符之良性样本；`dispatch` 行一律保留
 
 ## 第四步 · 写配置
-**由主 agent 亲改** `~/.pi/agent/jev-comp/compliance-rules.json`（顶层键＝agent 名；三保留键 `_global`/`_questions`/`_all` 勿误作 agent 名、勿改其结构——`_all` 组内规则之增删乃全局基线决议，照第二步）——prompt 与规则类之增删改概不假手 subagent。写前先读档，核对既有各组不被破坏；同义之问引同一编号，勿另起一条。告用户 `/reload` 生效。
+**由主 agent 亲改** `~/.pi/agent/jev-comp/compliance-rules.json`（顶层键＝agent 名；三保留键 `_global`/`_questions`/`_all` 勿误作 agent 名；问之判法入 `_questions` 条目，各组与 `_all` 的 `rules` 唯列问句号——增删皆照第二步）——prompt 与规则类之增删改概不假手 subagent。写前先读档，核对既有各组不被破坏；同义且同判之问引同一编号，勿另起一条。告用户 `/reload` 生效。
 
 ## 配置档 schema 速查
-顶层键即 agent 名（保留键 `_global`/`_questions`/`_all` 除外），下书 `agentDesc` 与 `rules` 数组；`_all` 组形同志而**无 `agentDesc`**（未配置 agent 之述语写死 "a sub-agent"），其规则凡派单皆查；规则字段：`id`/`question`/`blockWhen`/`threshold`/`message`——`question` 为顶层问句库 `_questions` 之编号（`Q001`、`Q002`…，编号只增不退），库中每项形如 `{label?, instructions, criteria?}`（`label` 为中文简述，仅供人读，代码一概忽略）。规则亦可内联 `instructions` ＋可选 `criteria`（旧形，仍兼容）：`question` 可解析者优先，编号悬空则回退内联，再无则该规则被跳过（fail-open）。`_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`；`_global.trainingLog`（默认 false）开则训练档另记三元组。
+- `_questions`：一问一条、**自含判法**——`{label?, instructions, criteria?, blockWhen, threshold, message}`；`label` 为中文简述，仅供人读，代码忽略；`instructions` 空白、`blockWhen` 非法、`threshold` 非有限数之条目加载时静默弃之（fail-open）
+- 各 agent 组（顶层键＝agent 名，保留键除外）：`{agentDesc, rules}`，`rules` 为**问句编号字符串数组**（如 `["Q001","Q002"]`）；非字符串项、悬空编号、组内重复皆静默忽略
+- `_all` 组形同志而**无 `agentDesc`**，其 `rules` 编号凡派单皆查（未配置 agent 述语写死 "a sub-agent"）；全局与组引并集去重、全局在前
+- `_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`；`_global.trainingLog`（默认 false）开则训练档另记三元组
 - below：概率 < 阈值则拦（正例，求达标有据）；above：概率 > 阈值则拦（反例，求犯忌有凭）
 - 拦截文案之首尾（「派单审核未通过…」/「请修正任务描述后重派。」）硬编码于扩展，唯 message 可配
-- **v0.7.0 起代码零内建规则**：配置档为规则唯一来源，档缺/坏即零规则全放行；档唯经本 skill 或用户手书创建，仓中样例仅示 schema、非部署之源
+- **v0.8.0 起 schema：问句自含、组列编号**；v0.7 之 `{id, question, …}` 规形不再加载（经本 skill 迁移）。代码零内建规则：档缺/坏即零规则全放行；档唯经本 skill 或用户手书创建，仓中样例仅示 schema、非部署之源
 
 ## 校准经验
 实测贴线（如 0.77 vs 阈 0.8）即降阈 0.1 复测；好任务之反例值得分常 ≤0.4，降至 0.7 误伤甚微（worker 之 W6 前例：0.8 漏拦「顺带一句」，降 0.7 后 0.77 正入彀中）。

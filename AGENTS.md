@@ -6,13 +6,13 @@
 
 pi package（名 **pi-subagent-jev**），扩展二枚：**`extensions/pi-subagent-jev.ts`**（`jev_ask`/`jev_models` 工具 ＋ 派单拦截）与 **`extensions/orchestrator-main.ts`**（opt-in 主会话治理，见下节）：
 - **派单拦截** — subagent 派单合规**拦截**：钩 pi 的 `tool_call` 事件，对命中规则集之派单（`_all` 全局组在配则凡派单皆中，含无专属组之 agent）把任务原文打包为 state，向 JEV System One 一次性求值；命中规则即返回 `{ block: true, reason }`，reason 格式为：
-  `派单审核未通过（agent=<名>）：` 首行，随后每条违规一行、以 `- ` 前缀（形如 `- R1: 任务未给出具体文件路径`），末行固定 `请修正任务描述后重派。`；整个 reason 作为错误结果返给主 agent，subagent 不被派生。
+  `派单审核未通过（agent=<名>）：` 首行，随后每条违规一行、以 `- ` 前缀（形如 `- Q001: 任务未给出具体文件路径`），末行固定 `请修正任务描述后重派。`；整个 reason 作为错误结果返给主 agent，subagent 不被派生。
 - **通用工具** — `jev_ask`（对 state 文本求值一批类型化问题：`noul` / `choice` / `score`）与 `jev_models`（列端点已连模型）。
 
 逻辑层在 `jev/`：
 - `jev/client.ts` — JEV API 传输层（零 npm 依赖，`spawn curl`；端点由 `JEV_AI_BASE_URL` 必配、无内建默认，路径 `/v1/systemone` 与 `/v1/models`；错误映射为 `JevError`；`ask()` 可携 failover 链路按序切换上游）
 - `jev/failover.ts` — 多上游 failover 纯逻辑层（`upstreams.json` 解析校验 `loadFailoverConfig`、失败分类 `classifyFailure`、进程内冷却表 `CooldownTracker`；零 IO 零 curl，可测）
-- `jev/compliance.ts` — 规则集（`RULE_SETS`）、state 拼装（`buildState`）、阈值矩阵与 verdict、audit 行构造、配置档合并（`loadRuleSets`）、主流程 `checkDispatch`
+- `jev/compliance.ts` — 配置档解析（问句自含判法、组为编号引用，`loadRuleSets`）、state 拼装（`buildState`）、阈值矩阵与 verdict、audit 行构造、主流程 `checkDispatch`（`RULE_SETS` 自 v0.7 为空、仅余导出）
 
 ## 结构图
 
@@ -29,7 +29,7 @@ pi-subagent-jev/
 │   ├── compliance.ts          # 规则/判定/audit 行（纯逻辑，可测）
 │   └── compliance.test.ts
 ├── docs/
-│   └── adr/                     # 0001-upstream-failover.md、0002-global-rules-and-config-only.md
+│   └── adr/                     # 0001-upstream-failover.md、0002-global-rules-and-config-only.md、0003-self-contained-questions.md
 ├── scripts/
 │   ├── calibrate.ts           # 阈值校准脚本（发真实请求，不进测试）
 │   └── calibration-20260925.jsonl
@@ -40,7 +40,7 @@ pi-subagent-jev/
 │   └── subagent-jev/SKILL.md
 ├── README.md
 ├── AGENTS.md
-├── CONTEXT.md                 # 术语表（Upstream / Failover / Cooldown / 全局规则 _all）
+├── CONTEXT.md                 # 术语表（Upstream / Failover / Cooldown / 全局规则 _all / 问句自含）
 ├── LICENSE
 ├── package.json
 └── .gitignore
@@ -56,17 +56,17 @@ pi-subagent-jev/
 3. **任何错误 fail-open** — JEV 出错、配置档出错、概率缺失或 noul 字段缺失/非有限数皆放行（后者曾为漏洞，已修复：该规则标 `unknown` 不拦），绝不阻断派发、绝不外抛。`checkDispatch` 捕获一切异常返 `verdict:"error"` 行且 violations 为空
 
 ## 测试铁律
-- `npm test`（即 `node --test jev/*.test.ts`，109 条）**全绿方可提交**
+- `npm test`（即 `node --test jev/*.test.ts`，110 条）**全绿方可提交**
 - 测试不发真实 JEV 端点请求：`client.test.ts` 起本地 127.0.0.1 随机端口 mock HTTP server、真发 curl；`failover.test.ts` 纯逻辑＋注入时钟；`compliance.test.ts` 注入 `askFn`。`scripts/calibrate.ts` 是唯一发真实请求的脚本，不进测试
 
 ## 配置与运行时
-- 规则配置表生效档：`~/.pi/agent/jev-comp/compliance-rules.json`（**v0.7.0 起代码零内建规则，此档为规则唯一来源**——档缺/坏即零拦截全放行；档经 subagent-jev skill 创建或用户手书，仓内 `examples/compliance-rules.sample.json` 仅示 schema、非部署之源）。配置表在扩展加载时**读一次**，改后须在 pi 内 `/reload` 方生效
-- 规则全由配置驱动：规则 id 为任意字符串（不限于 R1-R4），每规则自带 `instructions`/`blockWhen`（below/above）/`threshold`/`message`，另可选 `criteria`（true/false 答支判据，透传 JEV 消歧；非法值静默弃之，fail-open）与 `question`（引顶层问句库编号，可选）；verdict 标签与拦截判定均按配置计算，无硬编码规则 id
-- 顶层共享问句库 `_questions`（形如 `"Q001": { "label"?, "instructions"?, "criteria"? }`）：**同文之条引同一编号，改则一处生效**。规则给 `question` 且该编号在库中可解析 → 以库中 `instructions`/`criteria` 为准，**忽略该规则内联之两者**；编号悬空或库中无此项 → 回退该规则内联字段（再无内联则 `instructions` 为空，循既有「空/空白 instructions 之规则在检查时跳过」之 fail-open，**绝不抛错**）。`label` 仅供人读、一概忽略（可存不可用）。展开**于各组解析时**进行（agent 组与 `_all` 同一机制）；展开后内部规则对象仍持 `instructions`/`criteria`，`checkDispatch`、audit、训练记录之形状一律同旧
+- 规则配置表生效档：`~/.pi/agent/jev-comp/compliance-rules.json`（**v0.7.0 起代码零内建规则，此档为规则唯一来源**——档缺/坏即零拦截全放行；档经 subagent-jev skill 创建或用户手书，仓内 `examples/compliance-rules.sample.json` 仅示 schema、非部署之源；**v0.8.0 起 schema：问句自含判法，各组 `rules` 为问句编号字符串数组**）。配置表在扩展加载时**读一次**，改后须在 pi 内 `/reload` 方生效
+- 问句即规则（v0.8.0）：`_questions` 每条自含 `instructions`／可选 `criteria`（true/false 答支判据，透传 JEV 消歧，非法值静默弃之）／`blockWhen`（below/above）／`threshold`／`message`；各 agent 组与 `_all` 的 `rules` 为问句编号字符串数组（如 `["Q001"]`）。verdict 标签与拦截判定均按配置计算，无硬编码编号
+- 顶层问句库 `_questions`（形如 `"Q001": { "label"?, "instructions", "criteria"?, "blockWhen", "threshold", "message" }`）：一问一条、自含判法，**同文之条共用一编号，改则一处生效**。`label` 仅供人读、一概忽略。条目须 `instructions` 非空白、`blockWhen` 为 below/above、`threshold` 为有限数，否则加载时整条静默弃之（fail-open，**绝不抛错**）。编号约定：agent 专属问以 `Q` 冠（只增不退）、全局问以 `G` 冠
 - 审计日志：`~/.pi/agent/jev-comp/audit.jsonl`（每次求值一行；**命中拦截时**含 `blocked` 数组，无命中则不写此键）。顶层开关 `_global: { "auditProbabilities": true }` 时审计行附 `probs`（规则 id → 原始概率，仅有限值）；缺省/false 不附。**仅切换发生或保底成功时**审计行另附 `upstream`（胜出端点名）与 `failover`（历次失败/冷却尝试 `{name,status?,kind?,ms,retryAfterMs?,fallback?}` 数组；无尝试则不落此键）；保底成功（全链冷却下被迫真发首名）另附 `fallback: true`；未切换且非保底之行无上述诸键；全链败尽之错误行只带 `failover`（无胜者）
 - 训练记录：`_global: { "trainingLog": true }`（缺省 false）时，每次派单求值与每次 `jev_ask` 调用另追加一行于 `~/.pi/agent/jev-comp/training.jsonl`（state ＋ questions ＋ 概率/答案，`source` 为 `"dispatch"`/`"ask"`）；写入失败静默吞（fail-open），运行时数据不入库。另有 `scripts/prune-training.ts`（缺省 dry-run，`--write` 落档并自动备份）——按现行规则档甄别训练档，剔去以旧版 criteria 或临时 key 求值之测试行，唯留逐字相符者；`dispatch` 行一律保留
 - key 解析链（`jev/client.ts`）：显式参数 `apiKey` → 进程 env `JEV_AI_API_KEY` → env 档（`envFile` 参数 → `JEV_AI_ENV_FILE` → 默认 `~/.config/jev-comp/env`，600 权限）。env 档可配三键：`JEV_AI_API_KEY`/`JEV_AI_BASE_URL`/`JEV_AI_MODEL`（后者仅作用于 `ask()`）。env 档于进程内有缓存（`envFileCache`，键为档路径，无失效机制），运行期改档须 `/reload` 方生效——`/reload` 重导入扩展模块、缓存随实例重置（2026-09-27 实证）。model 解析序：显式参数 `model` → 进程 env `JEV_AI_MODEL` → env 档 → 内建默认 `oc/jev-1.13-free`。另有 `JEV_AI_BASE_URL`（**必配**，无内建默认；解析序：显式参数 `baseUrl` → 进程 env → env 档，全落空则 `ask()`/`listModels()` 报 `not_configured`，派单拦截 fail-open 放行）与 `JEV_AI_PROXY`（显式给值且端点非本地时走代理）。
-- 配置档合并语义（`jev/compliance.ts` 之 `loadRuleSets`，返回 `{ agents, all, global }`）：**v0.7.0 起内建规则全废（`RULE_SETS` 为空），规则唯存配置档**；顶层保留键三——`_global`（全局开关）、`_questions`（共享问句库）、**`_all`（全局规则组）**，均不视作 agent 名。`_all` 之规则凡派单皆受查（含无专属组之 agent，其 state 述语写死 `"a sub-agent"`，`_all.agentDesc` 不读），与 agent 专属组并集求值（一次请求）；**规则 id 禁同**（约定全局规则号/问句号以 `G` 冠之），撞则 agent 专属静默优先。各顶层组独立解析：组内规则按序，同 id 后条覆盖前条已给字段；规则之 `question` 引用于组内解析时展开（`_all` 与 agent 组同一机制），展开后内部形状同旧；任何读取/解析错误静默回空默认（fail-open）。最终 `instructions` 为空/空白的规则在检查时跳过（fail-open）；`criteria` 非法值静默弃之
+- 配置档解析语义（`jev/compliance.ts` 之 `loadRuleSets`，返回 `{ agents, all, global }`）：**v0.7.0 起内建规则全废（`RULE_SETS` 为空），规则唯存配置档；v0.8.0 起组唯编号引用，旧 `{id, question, …}` 规形不再加载**；顶层保留键三——`_global`（全局开关）、`_questions`（自含问句库）、**`_all`（全局引用组）**，均不视作 agent 名。`_all` 之 `rules` 所列问句凡派单皆受查（含无专属组之 agent，其 state 述语写死 `"a sub-agent"`，`_all.agentDesc` 不读），与 agent 专属编号并集**去重**（全局在前，一次请求）；组内非字符串项、悬空编号、重复编号皆静默忽略。任何读取/解析错误静默回空默认（fail-open）
 - 二者皆**运行时数据，不入库**（仓库存样例与代码，不存实际配置与审计留痕）
 - **多上游 failover（可选）**：生效档 `~/.pi/agent/jev-comp/upstreams.json`（仓库内 `examples/upstreams.sample.json` 为样例；代码只读绝不写，运行时数据不入库）。档不存在或任何解析/校验错误 → 返 null，走旧单端点链路（fail-open）。扩展加载时读一次（`jev/compliance.ts` 模块级懒缓存，`/reload` 重导入即重置）。顶层 `timeoutMs`（缺省 5000，curl `--max-time` 按秒取整）与 `cooldownMs`（缺省 30000）须为正整数；`upstreams` 须非空数组，每项 `{name, baseUrl, apiKey, model, proxy?}`：name 非空且唯一、baseUrl/apiKey/model 非空、baseUrl 末尾斜杠剥除、proxy 可选（缺省走既有 `JEV_AI_PROXY` 链）。`ask()` 按序尝试：首级用显式 `model` 参数（若传）否则各 upstream 自身 model；显式传 `baseUrl`/`apiKey`（如校准脚本）绕开链路。切换分类与冷却语义见 `jev/failover.ts` 档头注释（链上只一 upstream 时，其入冷却即全链冷却、每次皆保底真发，故冷却仅余 audit 意义）；决策记录见 `docs/adr/0001-upstream-failover.md`
 
