@@ -20,6 +20,8 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 ## 第〇步 · 查模型设置
 
 > 若规则档 `_global.transport` 为 `"builtin"`（v0.10.0 起），求值走 pi ≥0.99 内建 classifier 平台，凭据由 pi 代管（env `TYPESAFE_API_KEY`／`OPENCODE_API_KEY` 或 `auth.json` 条目），本步之 env 档三键查配可免；链路条目在 `_global.builtinChain`（`{provider, model}` 有序数组，缺省 `[{"provider":"typesafe","model":"jev-latest"}]`）。本步以下各节唯 selfhost 路之备置。
+>
+> selfhost 路可选配 `~/.pi/agent/jev-comp/upstreams.json` 多上游 failover（顶层 `timeoutMs`/`cooldownMs`，各级 `{name, baseUrl, apiKey, model, proxy?}` 按序切换；档缺/坏静默回单端点，fail-open）。样例见仓内 `examples/upstreams.sample.json`；此档聚多枚 key，本 skill 不代写，由用户手书为宜。详见 README「多上游 failover」节。
 
 1. 遣 scout 查 `~/.config/jev-comp/env` 之**键名**（唯查 `JEV_AI_API_KEY`/`JEV_AI_BASE_URL`/`JEV_AI_MODEL` 三键之有无，**绝不读值**）及进程 env 同名变量之有无。
 2. 缺 `JEV_AI_BASE_URL` 或 `JEV_AI_MODEL` → 询问用户后遣 delegate 以 `KEY=VALUE` 行写入该 env 档（档权限须 600）。
