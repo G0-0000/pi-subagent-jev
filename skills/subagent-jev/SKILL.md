@@ -18,6 +18,9 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 3. 已装 → 径续。
 
 ## 第〇步 · 查模型设置
+
+> 若规则档 `_global.transport` 为 `"builtin"`（v0.10.0 起），求值走 pi ≥0.99 内建 classifier 平台，凭据由 pi 代管（env `TYPESAFE_API_KEY`／`OPENCODE_API_KEY` 或 `auth.json` 条目），本步之 env 档三键查配可免；链路条目在 `_global.builtinChain`（`{provider, model}` 有序数组，缺省 `[{"provider":"typesafe","model":"jev-latest"}]`）。本步以下各节唯 selfhost 路之备置。
+
 1. 遣 scout 查 `~/.config/jev-comp/env` 之**键名**（唯查 `JEV_AI_API_KEY`/`JEV_AI_BASE_URL`/`JEV_AI_MODEL` 三键之有无，**绝不读值**）及进程 env 同名变量之有无。
 2. 缺 `JEV_AI_BASE_URL` 或 `JEV_AI_MODEL` → 询问用户后遣 delegate 以 `KEY=VALUE` 行写入该 env 档（档权限须 600）。
 3. 缺 `JEV_AI_API_KEY` → **嘱用户亲笔自填**，agent 全程不经手其值。
@@ -64,7 +67,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - `_questions`：一问一条、**自含判法**——`{label?, instructions, criteria?, blockWhen, threshold, message}`；`label` 为中文简述，仅供人读，代码忽略；`instructions` 空白、`blockWhen` 非法、`threshold` 非有限数之条目加载时静默弃之（fail-open）
 - 各 agent 组（顶层键＝agent 名，保留键除外）：`{agentDesc, mode?, rules}`，`rules` 为**问句编号字符串数组**（如 `["Q001","Q002"]`）；可选 `mode` 为 `block`（缺省）/`warn`；非字符串项、悬空编号、组内重复、非法 mode 皆静默忽略
 - `_all` 组形同志而**无 `agentDesc`**，其 `rules` 编号凡派单皆查（未配置 agent 述语写死 "a sub-agent"）；全局与组引并集去重、全局在前
-- `_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`；`_global.trainingLog`（默认 false）开则训练档另记三元组；`_global.mode`（v0.9，默认 block）置 `warn` 即全局观察期（组级 `mode` 可覆盖）；warn 命中之 audit 行附 `action:"warn"`
+- `_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`；`_global.trainingLog`（默认 false）开则训练档另记三元组；`_global.mode`（v0.9，默认 block）置 `warn` 即全局观察期（组级 `mode` 可覆盖）；warn 命中之 audit 行附 `action:"warn"`；`_global.transport`（v0.10.0，默认 `selfhost`，非法值静默回缺省）置 `builtin` 则求值改走 pi ≥0.99 内建 classifier 平台（凭据 pi 代管、无须 env 档三键），链路为 `_global.builtinChain`（`{provider, model}` 有序数组，缺省 typesafe/jev-latest，非法项静默弃）；builtin 下 `jev_ask` 之 `model` 参数接受但忽略、`jev_models` 仍走 selfhost
 - below：概率 < 阈值则拦（正例，求达标有据）；above：概率 > 阈值则拦（反例，求犯忌有凭）
 - 拦截文案之首尾（「派单审核未通过…」/「请修正任务描述后重派。」）硬编码于扩展，唯 message 可配
 - **v0.8.0 起 schema：问句自含、组列编号**；v0.7 之 `{id, question, …}` 规形不再加载（经本 skill 迁移）。**v0.9.0 起可选 `mode: block|warn`（全局与组级两层）**，详见第二步。代码零内建规则：档缺/坏即零规则全放行；档唯经本 skill 或用户手书创建，仓中样例仅示 schema、非部署之源
