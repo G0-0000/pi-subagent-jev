@@ -44,6 +44,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - `criteria` 可选：`true`/`false` 各一句英文判据，划清答支边界（实测可移概率 0.4–0.7）。写法要诀：**须提供问句未载之边界信息**——纯复述问句定义者无效（分数纹丝不动，W5 首稿之鉴）；`false` 支列举常见误判场景最见效（如「执行已定方案之战术裁量不算决策」「删 node_modules/dist 之类可逆日常操作不算破坏」「任务文中已带批准语不算无确认」）。问句含糊、裸问置信度飘忽或贴线时用之
 - 问句编号任意字符串：agent 专属问以 `Q` 冠（`Q001`…，只增不退），全局问以 `G` 冠（`G001`…）
 - **全局基线问列入 `_all` 组之 `rules` 编号数组**（顶层保留键，凡派单皆查——含无专属组之 agent，其 state 述语写死 "a sub-agent"）；`rules` 为问句号字符串数组，全局与组引同号时去重（全局在前），一问号唯一定义其判法
+- **处置模式 `mode`**：缺省 `block`（命中即硬拦）；新规则观察期、新用户试水可置 `"warn"`——命中不拦，违规清单追加于该次 subagent 工具结果（异步随启动回执、及时可中断；阻塞随最终输出、属事后复核），由主 agent 自决。可组级单设，亦可 `_global.mode: "warn"` 全局观察期，组级覆盖全局；写权组（worker/coder/delegate）用 warn 须慎，阻塞派单活已干完
 - **先呈中文对照表（id/向性/问句中译/阈值/拦截文案）候用户首肯**，再动下一步
 
 ## 第三步 · 测规则（裸问 vs criteria 对比测试）
@@ -61,12 +62,12 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 
 ## 配置档 schema 速查
 - `_questions`：一问一条、**自含判法**——`{label?, instructions, criteria?, blockWhen, threshold, message}`；`label` 为中文简述，仅供人读，代码忽略；`instructions` 空白、`blockWhen` 非法、`threshold` 非有限数之条目加载时静默弃之（fail-open）
-- 各 agent 组（顶层键＝agent 名，保留键除外）：`{agentDesc, rules}`，`rules` 为**问句编号字符串数组**（如 `["Q001","Q002"]`）；非字符串项、悬空编号、组内重复皆静默忽略
+- 各 agent 组（顶层键＝agent 名，保留键除外）：`{agentDesc, mode?, rules}`，`rules` 为**问句编号字符串数组**（如 `["Q001","Q002"]`）；可选 `mode` 为 `block`（缺省）/`warn`；非字符串项、悬空编号、组内重复、非法 mode 皆静默忽略
 - `_all` 组形同志而**无 `agentDesc`**，其 `rules` 编号凡派单皆查（未配置 agent 述语写死 "a sub-agent"）；全局与组引并集去重、全局在前
-- `_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`；`_global.trainingLog`（默认 false）开则训练档另记三元组
+- `_global.auditProbabilities`（默认 false）开则 audit 行兼记概率原值 `probs`；`_global.trainingLog`（默认 false）开则训练档另记三元组；`_global.mode`（v0.9，默认 block）置 `warn` 即全局观察期（组级 `mode` 可覆盖）；warn 命中之 audit 行附 `action:"warn"`
 - below：概率 < 阈值则拦（正例，求达标有据）；above：概率 > 阈值则拦（反例，求犯忌有凭）
 - 拦截文案之首尾（「派单审核未通过…」/「请修正任务描述后重派。」）硬编码于扩展，唯 message 可配
-- **v0.8.0 起 schema：问句自含、组列编号**；v0.7 之 `{id, question, …}` 规形不再加载（经本 skill 迁移）。代码零内建规则：档缺/坏即零规则全放行；档唯经本 skill 或用户手书创建，仓中样例仅示 schema、非部署之源
+- **v0.8.0 起 schema：问句自含、组列编号**；v0.7 之 `{id, question, …}` 规形不再加载（经本 skill 迁移）。**v0.9.0 起可选 `mode: block|warn`（全局与组级两层）**，详见第二步。代码零内建规则：档缺/坏即零规则全放行；档唯经本 skill 或用户手书创建，仓中样例仅示 schema、非部署之源
 
 ## 校准经验
 实测贴线（如 0.77 vs 阈 0.8）即降阈 0.1 复测；好任务之反例值得分常 ≤0.4，降至 0.7 误伤甚微（worker 之 W6 前例：0.8 漏拦「顺带一句」，降 0.7 后 0.77 正入彀中）。

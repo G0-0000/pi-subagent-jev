@@ -7,6 +7,9 @@
 // verdict 标签与拦截判定均按配置计算，无硬编码规则 id。
 // 另有 `_all` 全局规则组：凡派单皆受查（含无专属组之 agent），与 agent 专属组并成一次请求；
 // 同一 id 既列 `_all` 又列组内 → 去重（全局在前）——同一 id 即同一问句，无冲突胜负语义。
+// 模式（v0.9.0）：`_global.mode` 为全局缺省（唯 "block"|"warn"，非法静默回 "block"），
+// 各 agent 组可选 `mode` 覆盖之（组优先于全局）；block（缺省）命中即拦（行为逐字不变），
+// warn 只记不拦——违规清单由扩展壳暂存于 toolCallId，事后缀到 tool_result 文本（观察模式）。
 // 任何错误 fail-open：JEV 出错、配置档出错、概率缺失皆放行，绝不外抛。
 import {
   ask as defaultAsk,
@@ -47,7 +50,10 @@ export type RuleConfig = {
   message: string; // 命中拦截时返给主 agent 的人话
 };
 
-export type AgentRuleSet = { agentDesc: string; rules: RuleConfig[] };
+/** 派单处置模式："block"=命中即拦（缺省）；"warn"=只记不拦（观察模式）。 */
+export type Mode = "block" | "warn";
+
+export type AgentRuleSet = { agentDesc: string; rules: RuleConfig[]; mode?: Mode };
 
 /**
  * 内建默认规则集：v0.7.0 起全废（配置档为规则之唯一来源）。保留导出以兼容既有引用。
@@ -114,6 +120,8 @@ export type AuditLineFields = {
   failover?: AttemptRecord[];
   /** 保底尝试标记——本次成功之请求系全链冷却下保底真发之首名 */
   fallback?: boolean;
+  /** warn 观察模式标记——仅 warn 模式且确有违规之审计行落此键；block/放行/错误诸行永不落 */
+  action?: "warn";
 };
 
 export type AuditLine = {
@@ -130,7 +138,13 @@ export type AuditLine = {
   upstream?: string;
   failover?: AttemptRecord[];
   fallback?: boolean;
+  action?: "warn";
 };
+
+/** 模式解析（纯函数）：组显式 mode 优先，其次全局 mode，皆无 → "block"。 */
+export function resolveMode(agent: string, loaded: LoadedRules): Mode {
+  return loaded.agents[agent]?.mode ?? loaded.global.mode ?? "block";
+}
 
 /** audit.jsonl 单行构造（不含换行符）。task_excerpt 按 Unicode 码点截 ≤200 字。 */
 export function auditLine(fields: AuditLineFields): AuditLine {
@@ -149,6 +163,8 @@ export function auditLine(fields: AuditLineFields): AuditLine {
   if (fields.upstream !== undefined) line.upstream = fields.upstream;
   if (fields.failover && fields.failover.length > 0) line.failover = fields.failover;
   if (fields.fallback) line.fallback = true;
+  // action 仅在 warn 观察模式且确有违规时由调用方传入；block/放行/错误诸行永不落此键（形状向后兼容）
+  if (fields.action === "warn") line.action = "warn";
   return line;
 }
 
@@ -162,15 +178,25 @@ type RawQuestion = {
   message?: unknown;
 };
 
-type RawRuleSet = { agentDesc?: unknown; rules?: unknown };
+type RawRuleSet = { agentDesc?: unknown; rules?: unknown; mode?: unknown };
 
 /** loadRuleSets 返回：配置档解析后之 agent 规则组 ＋ `_all` 全局规则组 ＋ 全局开关。 */
 export type LoadedRules = {
   agents: Record<string, AgentRuleSet>;
   /** `_all` 全局规则组：顶层无此键 / 值非法 / 无可解析规则 → null（fail-open，静默） */
   all: AgentRuleSet | null;
-  global: { auditProbabilities: boolean; trainingLog: boolean };
+  global: { auditProbabilities: boolean; trainingLog: boolean; mode: Mode };
 };
+
+/** mode 解析（v0.9.0）：唯字面 "warn" 方为 warn，其余（缺省/非法/大小写不符）一律 "block"（fail-open）。 */
+function parseMode(v: unknown): Mode {
+  return v === "warn" ? "warn" : "block";
+}
+
+/** 组级 mode（可选）：唯 "block"|"warn" 字面有效，其余（缺省/非法）置 undefined → 随 resolveMode 落到全局。 */
+function parseGroupMode(v: unknown): Mode | undefined {
+  return v === "warn" || v === "block" ? v : undefined;
+}
 
 /** 配置档顶层保留键：全局开关，不视作 agent 名。 */
 const GLOBAL_KEY = "_global";
@@ -246,7 +272,8 @@ function parseRuleRefs(cfg: unknown, questions: Map<string, RuleConfig>): RuleCo
  * 读配置档（v0.7.0 起配置档为规则之唯一来源，无任何内建缺省）：
  * 每个非保留键之顶层条目解析为一个 agent 规则组（agentDesc 取其字符串值，缺省空串；
  * rules 为问句 id 字符串数组，按 `_questions` 解析成完整规则，非法/未知/重复引用静默弃之）。
- * `_global: { auditProbabilities, trainingLog }` 为全局开关（皆缺省 false）。
+ * `_global: { auditProbabilities, trainingLog, mode }` 为全局开关（前二者缺省 false；mode 缺省 "block"，
+ * 非 "warn" 字面一律静默回 "block"）。`_all` 不读 mode（其上无 agentDesc 可言，模式唯组级与全局二者）。
  * `_questions` 为顶层自含问句库：每条 id 即规则 id，自带 instructions/criteria/blockWhen/
  * threshold/message：其中 instructions/blockWhen/threshold 为三项硬性条件，缺一之条目整条弃；唯 message 缺省 `规则 <id> 未通过`。
  * `_all` 为全局规则组：凡派单皆受查（含无专属组之 agent，其 state 述语写死 "a sub-agent"），
@@ -259,7 +286,7 @@ export function loadRuleSets(path: string): LoadedRules {
   const fallback = (): LoadedRules => ({
     agents: RULE_SETS, // v0.7.0 起恒为空对象（内建已废）
     all: null,
-    global: { auditProbabilities: false, trainingLog: false },
+    global: { auditProbabilities: false, trainingLog: false, mode: "block" },
   });
   let raw: Record<string, RawRuleSet>;
   try {
@@ -273,6 +300,7 @@ export function loadRuleSets(path: string): LoadedRules {
   const gObj = g && typeof g === "object" ? (g as Record<string, unknown>) : undefined;
   const auditProbabilities = gObj?.auditProbabilities === true;
   const trainingLog = gObj?.trainingLog === true;
+  const mode = parseMode(gObj?.mode);
   const questions = parseQuestions((raw as Record<string, unknown>)[QUESTIONS_KEY]);
   const agents: Record<string, AgentRuleSet> = {};
   for (const [agent, cfg] of Object.entries(raw)) {
@@ -281,6 +309,9 @@ export function loadRuleSets(path: string): LoadedRules {
     agents[agent] = {
       agentDesc: typeof (cfg as RawRuleSet).agentDesc === "string" ? (cfg as RawRuleSet).agentDesc as string : "",
       rules: parseRuleRefs(cfg, questions),
+      ...(parseGroupMode((cfg as RawRuleSet).mode)
+        ? { mode: parseGroupMode((cfg as RawRuleSet).mode) }
+        : {}),
     };
   }
   // `_all` 全局规则组：值非法（字符串/数组等）→ parseRuleRefs 返空 → 视为无（null）
@@ -288,7 +319,7 @@ export function loadRuleSets(path: string): LoadedRules {
   return {
     agents,
     all: allRules.length > 0 ? { agentDesc: "", rules: allRules } : null,
-    global: { auditProbabilities, trainingLog },
+    global: { auditProbabilities, trainingLog, mode },
   };
 }
 
@@ -316,6 +347,18 @@ function getTracker(): CooldownTracker {
 export type CheckResult = { line: AuditLine; violations: string[] };
 
 /**
+ * warn 观察模式提示文本（纯函数，与 block reason 同族但明确非阻断）：
+ * 首行标明 agent 名与观察模式，随后每条违规一行、以 `- ` 前缀（同 block reason 之形）；
+ * 无末尾「请修正…」行——未阻断，无可修正之令。
+ */
+export function formatWarnNotice(agent: string, violations: string[]): string {
+  return (
+    `派单审核提示（agent=${agent}，warn 观察模式——未阻断，subagent 已照常派发，请主 agent 自行决断）：\n` +
+    violations.map((m) => `- ${m}`).join("\n")
+  );
+}
+
+/**
  * 主流程：agent 无专属组且无 `_all` 全局规则 → null；有则取有效规则（全局在前、agent 组在后，
  * 同 id 去重（全局在前）——问句自含后同一 id 即同一问句；instructions 为空/空白者跳过，
  * 全部无效亦返 null；无专属组之 agent 其 agentDesc 写死 "a sub-agent"，`_all.agentDesc` 不读），
@@ -324,6 +367,8 @@ export type CheckResult = { line: AuditLine; violations: string[] };
  * 命中者以 `${id}: ${message}` 全列入 violations，规则 id 全列入 line.blocked。
  * noul 字段缺失或非有限数：该规则标 unknown、不拦（fail-open，红线三）。
  * opts.auditProbabilities 为 true 时审计行附 probs（规则 id → 原始概率，仅有限值）。
+ * opts.mode（v0.9.0，缺省 "block"）：warn 观察模式不改变判定与 violations，仅当确有违规时
+ * 审计行另落 `action: "warn"` 一键（block/放行/错误诸行永不落此键，形状向后兼容）。
  * opts.trainingLog 为 true 时（且求值未走 error 路径）另有 opts.writeTraining（缺省落 training.jsonl）
  * 追加一条训练行；写入失败静默吞下。
  * JevError（及任何异常）捕获 → 返 error 行且 violations 为空，fail-open，绝不外抛。
@@ -338,6 +383,8 @@ export async function checkDispatch(
      *  同 id 去重（全局在前）——同一 id 即同一问句，无冲突胜负语义 */
     allRules?: AgentRuleSet;
     auditProbabilities?: boolean;
+    /** 处置模式（缺省 "block"）：warn 时命中不拦，审计行落 action:"warn"（仅违规行） */
+    mode?: Mode;
     /** 训练数据记录开关（缺省 false，不记） */
     trainingLog?: boolean;
     /** 训练行写入器（缺省 writeTrainingLine 落 training.jsonl；测试可注入 mock） */
@@ -439,6 +486,8 @@ export async function checkDispatch(
         latencyMs: Date.now() - start,
         blocked,
         probs: opts.auditProbabilities ? probs : undefined,
+        // warn 观察模式：仅确有违规之行落 action 键；block 模式（含缺省）与放行/错误行永不落（形状不变）
+        ...(opts.mode === "warn" && blocked.length > 0 ? { action: "warn" as const } : {}),
         ...(routed && meta
           ? {
               upstream: meta.upstream,

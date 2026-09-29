@@ -77,6 +77,7 @@
   },
   "worker": {
     "agentDesc": "an execution agent with shell access that implements approved plans/SOPs",
+    "mode": "warn",
     "rules": ["Q005"]
   },
   "coder": {

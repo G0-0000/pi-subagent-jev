@@ -12,8 +12,11 @@ import {
   auditLine,
   loadRuleSets,
   checkDispatch,
+  formatWarnNotice,
+  resolveMode,
   type AskFn,
   type AgentRuleSet,
+  type LoadedRules,
 } from "./compliance.ts";
 import type { DispatchTrainingLine } from "./traininglog.ts";
 
@@ -1228,4 +1231,156 @@ test("㊿c checkDispatch：agent 组注入同 id 而不同文之规则（防御�
   assert.equal(captured.G1.instructions, "全局版之问");
   assert.deepEqual(res.violations, ["G1: 全局版违规", "G2: G2 违规"]); // G1 保全局版（0.3<0.9 命中）
   assert.deepEqual(res.line.blocked, ["G1", "G2"]);
+});
+
+// ————— v0.9.0：warn 观察模式（mode 解析、audit action、formatWarnNotice） —————
+
+
+// 构造一个必然命中违规之 askFn（R2 低于阈、R4 高于阈）
+const violatingAsk: AskFn = async () => ({
+  model: "m",
+  answers: { R1: { noul: 0.95 }, R2: { noul: 0.3 }, R3: { noul: 0.01 }, R4: { noul: 0.9 } },
+  usage: {},
+});
+// 构造一个全绿之 askFn
+const cleanAsk: AskFn = async () => ({
+  model: "m",
+  answers: { R1: { noul: 0.95 }, R2: { noul: 0.9 }, R3: { noul: 0.01 }, R4: { noul: 0.05 } },
+  usage: {},
+});
+
+// mode 解析用之 LoadedRules 快捷构造（仅涉 mode 相关字段）
+const mkLoaded = (
+  agents: LoadedRules["agents"],
+  mode: LoadedRules["global"]["mode"] | undefined
+): LoadedRules => ({
+  agents,
+  all: null,
+  global: { auditProbabilities: false, trainingLog: false, ...(mode ? { mode } : { mode: "block" }) },
+});
+
+test("㊿d loadRuleSets mode：全局缺省 block；warn 得 warn；非法（BLOCK/数字/null）静默回 block（fail-open）", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const write = (name: string, g: unknown) => {
+    const p = path.join(dir, name);
+    writeFileSync(p, JSON.stringify({ _global: g, delegate: { rules: [] } }));
+    return p;
+  };
+  // 缺省（空 _global）→ block
+  assert.equal(loadRuleSets(write("def.json", {})).global.mode, "block");
+  // "warn" → warn
+  assert.equal(loadRuleSets(write("warn.json", { mode: "warn" })).global.mode, "warn");
+  // 显式 "block" → block
+  assert.equal(loadRuleSets(write("blk.json", { mode: "block" })).global.mode, "block");
+  // 非法一律回 block：大小写、数字、null、对象
+  assert.equal(loadRuleSets(write("up.json", { mode: "BLOCK" })).global.mode, "block");
+  assert.equal(loadRuleSets(write("num.json", { mode: 1 })).global.mode, "block");
+  assert.equal(loadRuleSets(write("null.json", { mode: null })).global.mode, "block");
+  assert.equal(loadRuleSets(write("obj.json", { mode: {} })).global.mode, "block");
+  // 无 _global 键 → block
+  const p2 = path.join(dir, "ng.json");
+  writeFileSync(p2, JSON.stringify({ delegate: { rules: [] } }));
+  assert.equal(loadRuleSets(p2).global.mode, "block");
+});
+
+test("㊿e loadRuleSets mode：组级 mode 解析（warn/block 有效，非法置 undefined 随全局）；_all 不读 mode", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const p = path.join(dir, "rules.json");
+  writeFileSync(
+    p,
+    JSON.stringify({
+      _global: { mode: "warn" },
+      delegate: { rules: [], mode: "block" },
+      worker: { rules: [], mode: "WARN" }, // 非法 → undefined
+      scout: { rules: [] }, // 无 mode → undefined
+      _all: { rules: [], mode: "warn" }, // 不读
+    })
+  );
+  const rs = loadRuleSets(p);
+  assert.equal(rs.agents.delegate.mode, "block");
+  assert.equal(rs.agents.worker.mode, undefined);
+  assert.equal(rs.agents.scout.mode, undefined);
+  assert.equal(rs.all, null); // 无有效规则 → null（mode 本就不读）
+});
+
+test("㊿f resolveMode：组显式优先于全局（双向）、无组随全局、非法组 mode 落到全局、皆无 → block", () => {
+  const withAgent = (mode: "block" | "warn" | undefined) =>
+    mkLoaded({ delegate: { agentDesc: "", rules: [], ...(mode ? { mode } : {}) } }, "warn");
+  // 组 warn 压全局 block；组 block 压全局 warn（双向）
+  assert.equal(resolveMode("delegate", mkLoaded({ delegate: { agentDesc: "", rules: [], mode: "warn" } }, "block")), "warn");
+  assert.equal(resolveMode("delegate", mkLoaded({ delegate: { agentDesc: "", rules: [], mode: "block" } }, "warn")), "block");
+  // 无组之 agent → 随全局
+  assert.equal(resolveMode("ghost", mkLoaded({ delegate: { agentDesc: "", rules: [], mode: "warn" } }, "block")), "block");
+  assert.equal(resolveMode("ghost", withAgent("warn")), "warn");
+  // 组无 mode（非法/缺省）→ 落到全局
+  assert.equal(resolveMode("delegate", withAgent(undefined)), "warn");
+  // 全局与组皆无 → block
+  assert.equal(resolveMode("delegate", mkLoaded({}, undefined)), "block");
+});
+
+test("㊿g checkDispatch warn：命中不拦（由调用方裁决）、审计行落 action:warn 且 blocked 仍在", async () => {
+  const r = await checkDispatch("delegate", TASK, {
+    askFn: violatingAsk,
+    ruleSets: DELEGATE_SET,
+    mode: "warn",
+  });
+  assert.ok(r);
+  assert.equal(r.line.verdict, "violation");
+  assert.deepEqual(r.line.blocked, ["R2", "R4"]); // blocked 照旧
+  assert.deepEqual(r.violations, ["R2: 任务无确定内容", "R4: 任务要求 agent 自行探索查资料"]); // violations 照旧
+  assert.equal(r.line.action, "warn"); // 唯一新增键
+});
+
+test("㊿h checkDispatch block（缺省）：命中行无 action 键（形状向后兼容）", async () => {
+  const explicit = await checkDispatch("delegate", TASK, {
+    askFn: violatingAsk,
+    ruleSets: DELEGATE_SET,
+    mode: "block",
+  });
+  const implicit = await checkDispatch("delegate", TASK, {
+    askFn: violatingAsk,
+    ruleSets: DELEGATE_SET,
+  });
+  for (const r of [explicit!, implicit!]) {
+    assert.ok(r);
+    assert.equal(r.line.verdict, "violation");
+    assert.deepEqual(r.line.blocked, ["R2", "R4"]);
+    assert.equal(r.line.action, undefined); // block 模式永不落
+  }
+  // 放行（全绿）之行在 warn 模式下亦不落 action
+  const pass = await checkDispatch("delegate", TASK, {
+    askFn: cleanAsk,
+    ruleSets: DELEGATE_SET,
+    mode: "warn",
+  });
+  assert.ok(pass);
+  assert.equal(pass.line.verdict, "pass");
+  assert.equal(pass.line.action, undefined);
+});
+
+test("㊿i checkDispatch warn：error 行永不落 action（fail-open 形状不变）", async () => {
+  const r = await checkDispatch("delegate", TASK, {
+    askFn: async () => {
+      throw new JevError("timeout", "请求超时");
+    },
+    ruleSets: DELEGATE_SET,
+    mode: "warn",
+  });
+  assert.ok(r);
+  assert.equal(r.line.verdict, "error");
+  assert.equal(r.line.action, undefined);
+});
+
+test("㊿j formatWarnNotice：逐字文本——首行标明观察模式，违规逐行 `- ` 前缀，无「请修正」尾行", () => {
+  assert.equal(
+    formatWarnNotice("delegate", ["R2: 任务无确定内容", "R4: 任务要求 agent 自行探索查资料"]),
+    "派单审核提示（agent=delegate，warn 观察模式——未阻断，subagent 已照常派发，请主 agent 自行决断）：\n" +
+      "- R2: 任务无确定内容\n" +
+      "- R4: 任务要求 agent 自行探索查资料"
+  );
+  // 单条
+  assert.equal(
+    formatWarnNotice("worker", ["Q001: 任务未给出具体文件路径"]),
+    "派单审核提示（agent=worker，warn 观察模式——未阻断，subagent 已照常派发，请主 agent 自行决断）：\n- Q001: 任务未给出具体文件路径"
+  );
 });
