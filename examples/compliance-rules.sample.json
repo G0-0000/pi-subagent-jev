@@ -1,5 +1,5 @@
 {
-  "_global": { "auditProbabilities": false, "trainingLog": false },
+  "_global": { "auditProbabilities": false, "trainingLog": false, "transport": "selfhost" },
   "_questions": {
     "G001": {
       "label": "任务目标明确（全局基线示例）",

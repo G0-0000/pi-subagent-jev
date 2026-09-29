@@ -25,6 +25,8 @@ pi-subagent-jev/
 ├── jev/
 │   ├── client.ts              # API 传输层（curl、错误映射、key 解析、failover 链路）
 │   ├── client.test.ts
+│   ├── builtin-transport.ts   # builtin 传输（pi 内建 classifier 平台）纯逻辑层：按序链试/noul↔bool 出入站映射/预败判级，注入 classifyFn 可测
+│   ├── builtin-transport.test.ts
 │   ├── failover.ts            # failover 纯逻辑（解析校验/失败分类/冷却表）
 │   ├── failover.test.ts
 │   ├── compliance.ts          # 规则/判定/audit 行（纯逻辑，可测）
@@ -59,7 +61,7 @@ pi-subagent-jev/
 3. **任何错误 fail-open** — JEV 出错、配置档出错、概率缺失或 noul 字段缺失/非有限数皆放行（后者曾为漏洞，已修复：该规则标 `unknown` 不拦），绝不阻断派发、绝不外抛。`checkDispatch` 捕获一切异常返 `verdict:"error"` 行且 violations 为空
 
 ## 测试铁律
-- `npm test`（即 `node --test jev/*.test.ts`，122 条）**全绿方可提交**
+- `npm test`（即 `node --test jev/*.test.ts`，138 条）**全绿方可提交**
 - 测试不发真实 JEV 端点请求：`client.test.ts` 起本地 127.0.0.1 随机端口 mock HTTP server、真发 curl；`failover.test.ts` 纯逻辑＋注入时钟；`compliance.test.ts` 注入 `askFn`。`scripts/calibrate.ts` 是唯一发真实请求的脚本，不进测试
 
 ## 配置与运行时
@@ -70,6 +72,7 @@ pi-subagent-jev/
 - 审计日志：`~/.pi/agent/jev-comp/audit.jsonl`（每次求值一行；**规则命中时**——block/warn 皆然——含 `blocked` 数组，无命中则不写此键；warn 模式之行另附 `action: "warn"`，block/pass/error 行形状不变）。顶层开关 `_global: { "auditProbabilities": true }` 时审计行附 `probs`（规则 id → 原始概率，仅有限值）；缺省/false 不附。**仅切换发生或保底成功时**审计行另附 `upstream`（胜出端点名）与 `failover`（历次失败/冷却尝试 `{name,status?,kind?,ms,retryAfterMs?,fallback?}` 数组；无尝试则不落此键）；保底成功（全链冷却下被迫真发首名）另附 `fallback: true`；未切换且非保底之行无上述诸键；全链败尽之错误行只带 `failover`（无胜者）
 - 训练记录：`_global: { "trainingLog": true }`（缺省 false）时，每次派单求值与每次 `jev_ask` 调用另追加一行于 `~/.pi/agent/jev-comp/training.jsonl`（state ＋ questions ＋ 概率/答案，`source` 为 `"dispatch"`/`"ask"`）；写入失败静默吞（fail-open），运行时数据不入库。另有 `scripts/prune-training.ts`（缺省 dry-run，`--write` 落档并自动备份）——按现行规则档甄别训练档，剔去以旧版 criteria 或临时 key 求值之测试行，唯留逐字相符者；`dispatch` 行一律保留
 - key 解析链（`jev/client.ts`）：显式参数 `apiKey` → 进程 env `JEV_AI_API_KEY` → env 档（`envFile` 参数 → `JEV_AI_ENV_FILE` → 默认 `~/.config/jev-comp/env`，600 权限）。env 档可配三键：`JEV_AI_API_KEY`/`JEV_AI_BASE_URL`/`JEV_AI_MODEL`（后者仅作用于 `ask()`）。env 档于进程内有缓存（`envFileCache`，键为档路径，无失效机制），运行期改档须 `/reload` 方生效——`/reload` 重导入扩展模块、缓存随实例重置（2026-09-27 实证）。model 解析序：显式参数 `model` → 进程 env `JEV_AI_MODEL` → env 档 → 内建默认 `oc/jev-1.13-free`。另有 `JEV_AI_BASE_URL`（**必配**，无内建默认；解析序：显式参数 `baseUrl` → 进程 env → env 档，全落空则 `ask()`/`listModels()` 报 `not_configured`，派单拦截 fail-open 放行）与 `JEV_AI_PROXY`（显式给值且端点非本地时走代理）。
+- **传输双路（可选，v0.10.0）**：`_global.transport`（缺省 `"selfhost"`，唯字面 `"builtin"` 生效、其余静默回缺省）择求值传输，随规则档加载时读一次。`builtin` 时经 pi 内建 classifier 平台（`ctx.modelRegistry.classify`，须 pi ≥ 0.99）求值——凭据 pi 代管（`--api-key`→`auth.json`→`models.json`→env），本仓零 key；链路为 `_global.builtinChain`（`{provider,model}` 有序数组，非法项静默弃，空/缺省回 `[{provider:"typesafe",model:"jev-latest"}]`），每级恒 `maxRetries:0` 守红线②；级败（异常／stopReason 非 stop／答案缺失或 noul 概率非有限／条目未解析预败零请求）即切下一级，全链败尽 fail-open。audit `model` 记胜出条目名 `<provider>/<model>`（非响应体模型 id）；builtin 下 jev_ask 之 model 参数接受但忽略；jev_models 仍走 selfhost 链。逻辑层在 `jev/builtin-transport.ts`（纯逻辑、注入 classifyFn 可测、零依赖 pi）
 - 配置档解析语义（`jev/compliance.ts` 之 `loadRuleSets`，返回 `{ agents, all, global }`）：**v0.7.0 起内建规则全废（`RULE_SETS` 为空），规则唯存配置档；v0.8.0 起组唯编号引用，旧 `{id, question, …}` 规形不再加载**；顶层保留键三——`_global`（全局开关）、`_questions`（自含问句库）、**`_all`（全局引用组）**，均不视作 agent 名。`_all` 之 `rules` 所列问句凡派单皆受查（含无专属组之 agent，其 state 述语写死 `"a sub-agent"`，`_all.agentDesc` 不读），与 agent 专属编号并集**去重**（全局在前，一次请求）；组内非字符串项、悬空编号、重复编号皆静默忽略。任何读取/解析错误静默回空默认（fail-open）
 - 二者皆**运行时数据，不入库**（仓库存样例与代码，不存实际配置与审计留痕）
 - **多上游 failover（可选）**：生效档 `~/.pi/agent/jev-comp/upstreams.json`（仓库内 `examples/upstreams.sample.json` 为样例；代码只读绝不写，运行时数据不入库）。档不存在或任何解析/校验错误 → 返 null，走旧单端点链路（fail-open）。扩展加载时读一次（`jev/compliance.ts` 模块级懒缓存，`/reload` 重导入即重置）。顶层 `timeoutMs`（缺省 5000，curl `--max-time` 按秒取整）与 `cooldownMs`（缺省 30000）须为正整数；`upstreams` 须非空数组，每项 `{name, baseUrl, apiKey, model, proxy?}`：name 非空且唯一、baseUrl/apiKey/model 非空、baseUrl 末尾斜杠剥除、proxy 可选（缺省走既有 `JEV_AI_PROXY` 链）。`ask()` 按序尝试：首级用显式 `model` 参数（若传）否则各 upstream 自身 model；显式传 `baseUrl`/`apiKey`（如校准脚本）绕开链路。切换分类与冷却语义见 `jev/failover.ts` 档头注释（链上只一 upstream 时，其入冷却即全链冷却、每次皆保底真发，故冷却仅余 audit 意义）；决策记录见 `docs/adr/0001-upstream-failover.md`

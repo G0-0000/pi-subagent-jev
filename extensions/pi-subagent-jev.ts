@@ -6,14 +6,22 @@
 // 观察式（v0.9.0，可选模式）：mode "warn" 时命中不拦、派单照常进行，违规清单暂存于
 //   toolCallId（WarningStore），并在该派单之 tool_result 事件上追加一段提示文本（fail-open）。
 // fail-open：JEV 出错、配置档（~/.pi/agent/jev-comp/compliance-rules.json）出错、任何异常皆放行。
+// 传输（v0.10.0，可选）：_global.transport === "builtin" 时求值（checkDispatch 与 jev_ask）改走
+// pi 内建 classifier 平台（ctx.modelRegistry.classify，链路 _global.builtinChain 经 findOfType 解析，
+// 见 jev/builtin-transport.ts）；缺省 "selfhost" 走自管 curl 链，路径逐字不变；接线异常落回自管链。
 // key 由 jev/client.ts 默认链自取（进程环境 JEV_AI_API_KEY），本文件不含任何 key。
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { appendFileSync } from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
 import { ask, listModels, JevError } from "../jev/client.ts";
 import { checkDispatch, formatWarnNotice, loadRuleSets, resolveMode } from "../jev/compliance.ts";
+import {
+  createBuiltinAsk,
+  type BuiltinAskFn,
+  type BuiltinClassifyFn,
+} from "../jev/builtin-transport.ts";
 import { WarningStore } from "../jev/warning-store.ts";
 import { askTrainingLine, writeTrainingLine } from "../jev/traininglog.ts";
 
@@ -28,6 +36,35 @@ export default function (pi: ExtensionAPI) {
   // 规则配置在扩展加载时读一次（改后 /reload 生效）；trainingLog 开关即取自此处
   const config = loadRuleSets(RULES_PATH);
 
+  // 内建传输（可选，_global.transport === "builtin" 时启用）：求值改走 pi 内建 classifier 平台
+  // （ctx.modelRegistry.classify——key/baseUrl/HTTP 由 pi 运行时解析，扩展不自持凭据）。
+  // 链路条目经 findOfType("classifier", provider, model) 解析（ctx 仅在钩子/工具处理器内可得，
+  // 故每次调用现解析；同步查表，代价可略），未解析成模型之条目为预败尝试；
+  // 接线任何异常 → undefined → 落回自管 curl 链（fail-open，绝不因接线失败拦派单）。
+  const useBuiltin = config.global.transport === "builtin";
+
+  /** 由 ctx 解析内建链路并构造 askFn；未启用或接线异常 → undefined（走既有自管链）。 */
+  function buildBuiltinAsk(ctx: ExtensionContext): BuiltinAskFn | undefined {
+    if (!useBuiltin) return undefined;
+    try {
+      // 直接透传 pi 之 classify（永不 reject，错误在 stopReason/errorMessage——与本仓 fail-open 契合）；
+      // options 恒携 maxRetries: 0（红线②，classify 内部 retryProviderRequest 以 options.maxRetries ?? 2 单发）。
+      const classifyFn: BuiltinClassifyFn = (model, context, options) =>
+        ctx.modelRegistry.classify(
+          model as Parameters<ExtensionContext["modelRegistry"]["classify"]>[0],
+          context as Parameters<ExtensionContext["modelRegistry"]["classify"]>[1],
+          options
+        );
+      const entries = config.global.builtinChain.map((e) => ({
+        name: `${e.provider}/${e.model}`,
+        model: ctx.modelRegistry.findOfType("classifier", e.provider, e.model) ?? null,
+      }));
+      return createBuiltinAsk(classifyFn, entries);
+    } catch {
+      return undefined;
+    }
+  }
+
   pi.registerTool({
     name: "jev_ask",
     label: "Jev Ask",
@@ -38,15 +75,22 @@ export default function (pi: ExtensionAPI) {
       questions: Type.Record(Type.String(), Type.Unknown(), {
         description: "问题 map，key 自取；每题为 {type:'noul'|'choice'|'score', instructions, ...}",
       }),
-      model: Type.Optional(Type.String({ description: "模型 ID，默认 oc/jev-1.13-free" })),
+      model: Type.Optional(Type.String({ description: "模型 ID，默认 oc/jev-1.13-free（transport=builtin 时忽略，链路由规则配置 _global.builtinChain 定）" })),
     }),
-    async execute(_id, params) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       try {
-        const result = await ask({
+        const req = {
           state: params.state,
           questions: params.questions as Parameters<typeof ask>[0]["questions"],
           model: params.model,
-        });
+          // 取消信号（有则）随求值透传：内建链由 builtin-transport 并入 classifyFn options；
+          // selfhost 链不识别此键、忽略之（请求形状不受影响）
+          ...(signal ? { signal } : {}),
+        };
+        // transport==="builtin" → 内建 askFn（model 参数于内建链忽略，链路条目各用自身模型）；
+        // 其余（含接线异常落回 undefined）走既有自管 curl 链，路径逐字不变
+        const builtinAsk = buildBuiltinAsk(ctx);
+        const result = builtinAsk ? await builtinAsk(req) : await ask(req);
         // 训练数据记录（开关开时）：state ＋ 问句 ＋ 返回答案逐字留存。
         // 记录失败静默吞下，绝不影响工具结果（fail-open，红线三）。
         if (config.global.trainingLog) {
@@ -116,7 +160,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.on("tool_call", async (event) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "subagent") return;
     const input = event.input as Record<string, unknown>;
     const agent = input.agent;
@@ -128,6 +172,7 @@ export default function (pi: ExtensionAPI) {
       // 处置模式：组级显式 ＞ 全局 ＞ block（纯函数归并，加载侧已保证值合法）
       const mode = resolveMode(agent, config);
       const res = await checkDispatch(agent, task, {
+        askFn: buildBuiltinAsk(ctx),
         ruleSets: config.agents,
         allRules: config.all ?? undefined,
         auditProbabilities: config.global.auditProbabilities,

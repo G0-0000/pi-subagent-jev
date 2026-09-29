@@ -10,6 +10,8 @@
 // 模式（v0.9.0）：`_global.mode` 为全局缺省（唯 "block"|"warn"，非法静默回 "block"），
 // 各 agent 组可选 `mode` 覆盖之（组优先于全局）；block（缺省）命中即拦（行为逐字不变），
 // warn 只记不拦——违规清单由扩展壳暂存于 toolCallId，事后缀到 tool_result 文本（观察模式）。
+// 传输（v0.10.0）：`_global.transport` 选求值传输——"selfhost"（缺省，自管 curl 链，行为不变）｜
+// "builtin"（pi 内建 classifier 平台，链路 `_global.builtinChain`，经扩展壳解析后注入 createBuiltinAsk）。
 // 任何错误 fail-open：JEV 出错、配置档出错、概率缺失皆放行，绝不外抛。
 import {
   ask as defaultAsk,
@@ -52,6 +54,21 @@ export type RuleConfig = {
 
 /** 派单处置模式："block"=命中即拦（缺省）；"warn"=只记不拦（观察模式）。 */
 export type Mode = "block" | "warn";
+
+/**
+ * 传输选择（v0.10.0）："selfhost"＝自管 curl 链（jev/client.ts，缺省，行为逐字不变）；
+ * "builtin"＝pi 内建 classifier 平台（ctx.modelRegistry.classify，链路见 builtinChain）。
+ * 解析：唯字面 "builtin" 生效，其余（缺省/非法/大小写不符）静默回 "selfhost"（fail-open）。
+ */
+export type Transport = "selfhost" | "builtin";
+
+/** 内建链路条目：`_global.builtinChain` 之合法项（provider/model 皆非空白字符串；多余键静默弃）。 */
+export type BuiltinChainEntry = { provider: string; model: string };
+
+/** 内建链路缺省：typesafe jev-latest 单级（pi 内建 classifier 平台同款端点/模型）。 */
+export const DEFAULT_BUILTIN_CHAIN: readonly BuiltinChainEntry[] = [
+  { provider: "typesafe", model: "jev-latest" },
+];
 
 export type AgentRuleSet = { agentDesc: string; rules: RuleConfig[]; mode?: Mode };
 
@@ -185,7 +202,16 @@ export type LoadedRules = {
   agents: Record<string, AgentRuleSet>;
   /** `_all` 全局规则组：顶层无此键 / 值非法 / 无可解析规则 → null（fail-open，静默） */
   all: AgentRuleSet | null;
-  global: { auditProbabilities: boolean; trainingLog: boolean; mode: Mode };
+  global: {
+    auditProbabilities: boolean;
+    trainingLog: boolean;
+    mode: Mode;
+    /** 传输选择（v0.10.0）：唯字面 "builtin" 走内建 classifier 平台，其余（缺省/非法）一律 "selfhost" */
+    transport: Transport;
+    /** 内建链路（transport==="builtin" 时由扩展壳经 findOfType 解析后注入 createBuiltinAsk）：
+     *  非法项静默弃，空/缺省回 DEFAULT_BUILTIN_CHAIN（typesafe/jev-latest） */
+    builtinChain: BuiltinChainEntry[];
+  };
 };
 
 /** mode 解析（v0.9.0）：唯字面 "warn" 方为 warn，其余（缺省/非法/大小写不符）一律 "block"（fail-open）。 */
@@ -196,6 +222,25 @@ function parseMode(v: unknown): Mode {
 /** 组级 mode（可选）：唯 "block"|"warn" 字面有效，其余（缺省/非法）置 undefined → 随 resolveMode 落到全局。 */
 function parseGroupMode(v: unknown): Mode | undefined {
   return v === "warn" || v === "block" ? v : undefined;
+}
+
+/**
+ * 内建链路解析（fail-open）：数组中每项须为对象且 provider/model 皆非空白字符串，
+ * 只取此二键（多余键弃之）；非法项静默弃。空数组/非数组/全非法 → 缺省单级链（typesafe/jev-latest）。
+ */
+function parseBuiltinChain(v: unknown): BuiltinChainEntry[] {
+  const out: BuiltinChainEntry[] = [];
+  if (Array.isArray(v)) {
+    for (const item of v) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const o = item as Record<string, unknown>;
+      if (typeof o.provider !== "string" || o.provider.trim() === "") continue;
+      if (typeof o.model !== "string" || o.model.trim() === "") continue;
+      // 存 trim 后之值：带空白之 " typesafe " 若原样入链，findOfType 必静默预败
+      out.push({ provider: o.provider.trim(), model: o.model.trim() });
+    }
+  }
+  return out.length > 0 ? out : [...DEFAULT_BUILTIN_CHAIN];
 }
 
 /** 配置档顶层保留键：全局开关，不视作 agent 名。 */
@@ -272,8 +317,9 @@ function parseRuleRefs(cfg: unknown, questions: Map<string, RuleConfig>): RuleCo
  * 读配置档（v0.7.0 起配置档为规则之唯一来源，无任何内建缺省）：
  * 每个非保留键之顶层条目解析为一个 agent 规则组（agentDesc 取其字符串值，缺省空串；
  * rules 为问句 id 字符串数组，按 `_questions` 解析成完整规则，非法/未知/重复引用静默弃之）。
- * `_global: { auditProbabilities, trainingLog, mode }` 为全局开关（前二者缺省 false；mode 缺省 "block"，
- * 非 "warn" 字面一律静默回 "block"）。`_all` 不读 mode（其上无 agentDesc 可言，模式唯组级与全局二者）。
+ * `_global: { auditProbabilities, trainingLog, mode, transport, builtinChain }` 为全局开关与全局选项
+ * （前二者缺省 false；mode 缺省 "block"，非 "warn" 字面一律静默回 "block"；
+ * transport 唯字面 "builtin" 生效、其余静默回 "selfhost"；builtinChain 非法项静默弃、空/缺省回缺省单级链）。`_all` 不读 mode（其上无 agentDesc 可言，模式唯组级与全局二者）。
  * `_questions` 为顶层自含问句库：每条 id 即规则 id，自带 instructions/criteria/blockWhen/
  * threshold/message：其中 instructions/blockWhen/threshold 为三项硬性条件，缺一之条目整条弃；唯 message 缺省 `规则 <id> 未通过`。
  * `_all` 为全局规则组：凡派单皆受查（含无专属组之 agent，其 state 述语写死 "a sub-agent"），
@@ -286,7 +332,13 @@ export function loadRuleSets(path: string): LoadedRules {
   const fallback = (): LoadedRules => ({
     agents: RULE_SETS, // v0.7.0 起恒为空对象（内建已废）
     all: null,
-    global: { auditProbabilities: false, trainingLog: false, mode: "block" },
+    global: {
+      auditProbabilities: false,
+      trainingLog: false,
+      mode: "block",
+      transport: "selfhost",
+      builtinChain: [...DEFAULT_BUILTIN_CHAIN],
+    },
   });
   let raw: Record<string, RawRuleSet>;
   try {
@@ -301,6 +353,8 @@ export function loadRuleSets(path: string): LoadedRules {
   const auditProbabilities = gObj?.auditProbabilities === true;
   const trainingLog = gObj?.trainingLog === true;
   const mode = parseMode(gObj?.mode);
+  const transport: Transport = gObj?.transport === "builtin" ? "builtin" : "selfhost";
+  const builtinChain = parseBuiltinChain(gObj?.builtinChain);
   const questions = parseQuestions((raw as Record<string, unknown>)[QUESTIONS_KEY]);
   const agents: Record<string, AgentRuleSet> = {};
   for (const [agent, cfg] of Object.entries(raw)) {
@@ -319,7 +373,7 @@ export function loadRuleSets(path: string): LoadedRules {
   return {
     agents,
     all: allRules.length > 0 ? { agentDesc: "", rules: allRules } : null,
-    global: { auditProbabilities, trainingLog, mode },
+    global: { auditProbabilities, trainingLog, mode, transport, builtinChain },
   };
 }
 

@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { JevError, setAskMeta, type SystemOneResult } from "./client.ts";
+import { createBuiltinAsk } from "./builtin-transport.ts";
 import {
   buildState,
   verdict,
@@ -1383,4 +1384,149 @@ test("㊿j formatWarnNotice：逐字文本——首行标明观察模式，违�
     formatWarnNotice("worker", ["Q001: 任务未给出具体文件路径"]),
     "派单审核提示（agent=worker，warn 观察模式——未阻断，subagent 已照常派发，请主 agent 自行决断）：\n- Q001: 任务未给出具体文件路径"
   );
+});
+
+test("㊿k loadRuleSets/_global：transport 解析——唯字面 \"builtin\" 生效，其余（缺省/非法/大小写不符）静默回 selfhost", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const write = (name: string, g: unknown) => {
+    const p = path.join(dir, name);
+    writeFileSync(p, JSON.stringify({ _global: g, delegate: { rules: [] } }));
+    return p;
+  };
+  assert.equal(loadRuleSets(write("builtin.json", { transport: "builtin" })).global.transport, "builtin");
+  assert.equal(loadRuleSets(write("selfhost.json", { transport: "selfhost" })).global.transport, "selfhost");
+  // 缺省 / 非法一律 selfhost（fail-open）
+  for (const [name, g] of [
+    ["absent.json", {}],
+    ["invalid-case.json", { transport: "Builtin" }],
+    ["invalid-other.json", { transport: "proxy" }],
+    ["invalid-type.json", { transport: 42 }],
+    ["invalid-null.json", { transport: null }],
+  ] as const) {
+    assert.equal(loadRuleSets(write(name, g)).global.transport, "selfhost", name);
+  }
+});
+
+test("㊿l loadRuleSets/_global：builtinChain 解析——非法项静默弃（只取 provider/model 二键、前后空白 trim 后存储），空/缺省回缺省单级链", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "jev-rules-"));
+  const write = (name: string, g: unknown) => {
+    const p = path.join(dir, name);
+    writeFileSync(p, JSON.stringify({ _global: g, delegate: { rules: [] } }));
+    return p;
+  };
+  const DEF = [{ provider: "typesafe", model: "jev-latest" }];
+  // 缺省 → 缺省单级链
+  assert.deepEqual(loadRuleSets(write("absent.json", {})).global.builtinChain, DEF);
+  // 合法项保留（多余键弃）、非法项静默弃：非对象/缺键/空串/非字符串皆弃
+  const mixed = loadRuleSets(
+    write("mixed.json", {
+      transport: "builtin",
+      builtinChain: [
+        { provider: "opencode", model: "jev-1.13-free", extra: 1 },
+        "junk",
+        { provider: "typesafe" },
+        { model: "jev-latest" },
+        { provider: "  ", model: "jev-latest" },
+        { provider: "typesafe", model: "jev-latest" },
+        42,
+        null,
+      ],
+    })
+  );
+  assert.deepEqual(mixed.global.builtinChain, [
+    { provider: "opencode", model: "jev-1.13-free" },
+    { provider: "typesafe", model: "jev-latest" },
+  ]);
+  // 前后空白：校验与存储皆按 trim 后之值（未 trim 之值入链会使 findOfType 静默预败）
+  assert.deepEqual(
+    loadRuleSets(
+      write("padded.json", { builtinChain: [{ provider: " typesafe ", model: " jev-latest " }] })
+    ).global.builtinChain,
+    [{ provider: "typesafe", model: "jev-latest" }]
+  );
+  // 全非法 / 空数组 / 非数组 → 缺省单级链
+  assert.deepEqual(loadRuleSets(write("allbad.json", { builtinChain: ["x", 1] })).global.builtinChain, DEF);
+  assert.deepEqual(loadRuleSets(write("empty.json", { builtinChain: [] })).global.builtinChain, DEF);
+  assert.deepEqual(loadRuleSets(write("nonarray.json", { builtinChain: "typesafe/jev-latest" })).global.builtinChain, DEF);
+  // 档坏 → fallback 全局形状仍完整（transport selfhost ＋ 缺省链）
+  const bad = path.join(dir, "bad.json");
+  writeFileSync(bad, "{ not json");
+  const badRes = loadRuleSets(bad);
+  assert.equal(badRes.global.transport, "selfhost");
+  assert.deepEqual(badRes.global.builtinChain, DEF);
+});
+
+test("㊿m checkDispatch × createBuiltinAsk：内建链注入后 audit 形状与 failover 语义照旧", async () => {
+  const rules = [
+    {
+      id: "Q1",
+      instructions: "Is the task concrete?",
+      blockWhen: "below" as const,
+      threshold: 0.7,
+      message: "任务未给出具体文件路径",
+    },
+  ];
+  const rs = { delegate: { agentDesc: "d", rules } };
+  const okAnswers = (p: number): Record<string, unknown> => ({
+    Q1: { type: "bool", probability: p },
+  });
+  /** fake classifyFn：按序弹出脚本结果（永不 reject，同 pi classify 契约）。 */
+  const fakeClassifyImpl = (
+    script: Array<{ stopReason: "stop" | "error" | "aborted"; answers: Record<string, unknown>; errorMessage?: string }>
+  ) => {
+    let i = 0;
+    return async () => script[i++]!;
+  };
+  // 首级即成：meta.attempts 空 → audit 行不落 upstream/failover 键（与 selfhost 首级成功逐字节同形）
+  {
+    const askFn = createBuiltinAsk(fakeClassifyImpl([{ stopReason: "stop", answers: okAnswers(0.9) }]), [
+      { name: "typesafe/jev-latest", model: { id: "jev-latest" } },
+    ]);
+    const r = await checkDispatch("delegate", "task", { askFn, ruleSets: rs });
+    assert.ok(r);
+    assert.equal(r.line.verdict, "pass");
+    assert.equal(r.line.upstream, undefined);
+    assert.equal(r.line.failover, undefined);
+    assert.equal(r.violations.length, 0);
+  }
+  // 首败切换：audit 行落 upstream=胜者、failover=[首败记录]
+  {
+    const askFn = createBuiltinAsk(
+      fakeClassifyImpl([
+        { stopReason: "error", errorMessage: "Provider is not configured", answers: {} },
+        { stopReason: "stop", answers: okAnswers(0.9) }, // below 规则：p≥阈 → pass（本例所验者是 failover 键）
+      ]),
+      [
+        { name: "a/one", model: { id: "one" } },
+        { name: "b/two", model: { id: "two" } },
+      ]
+    );
+    const r = await checkDispatch("delegate", "task", { askFn, ruleSets: rs });
+    assert.ok(r);
+    assert.equal(r.line.verdict, "pass");
+    assert.equal(r.line.upstream, "b/two");
+    assert.ok(Array.isArray(r.line.failover) && r.line.failover[0]!.name === "a/one");
+  }
+  // 全链败尽：verdict error、violations 空（fail-open）、audit 行带 failover
+  {
+    const askFn = createBuiltinAsk(
+      fakeClassifyImpl([{ stopReason: "error", errorMessage: "down", answers: {} }]),
+      [{ name: "a/one", model: { id: "one" } }]
+    );
+    const r = await checkDispatch("delegate", "task", { askFn, ruleSets: rs });
+    assert.ok(r);
+    assert.equal(r.line.verdict, "error");
+    assert.deepEqual(r.violations, []);
+    assert.ok(Array.isArray(r.line.failover) && r.line.failover[0]!.name === "a/one");
+  }
+  // 命中判定照旧：p<threshold → 拦，message 照常
+  {
+    const askFn = createBuiltinAsk(fakeClassifyImpl([{ stopReason: "stop", answers: okAnswers(0.3) }]), [
+      { name: "typesafe/jev-latest", model: { id: "jev-latest" } },
+    ]);
+    const r = await checkDispatch("delegate", "task", { askFn, ruleSets: rs });
+    assert.ok(r);
+    assert.deepEqual(r.line.blocked, ["Q1"]);
+    assert.deepEqual(r.violations, ["Q1: 任务未给出具体文件路径"]);
+  }
 });

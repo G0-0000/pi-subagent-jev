@@ -82,6 +82,15 @@ Create `~/.pi/agent/jev-comp/upstreams.json` (permissions 600; copy from [exampl
 
 `ask()` tries them in order — one request per upstream, never retrying the same one, never backing off. Switching to the next upstream happens **only** for: connection failure, timeout, HTTP 5xx, 429, 401, 403, 404, and an unusable 200 body. `402`, `422`, all other 4xx (400/405/408/409/…), `3xx`, and `not_configured` throw immediately with zero requests to later upstreams. Only connection-level failures (network / timeout / 5xx) put an upstream into cooldown; 429 and other 4xx never do. During the `cooldownMs` window the level is skipped with zero HTTP requests and recorded in the audit as `{name, kind: "cooldown"}`; once the window expires the level is retried (the cooldown table is in-memory only — a restart forgets it). When every level is cooling, the first one is still attempted as a fallback — never an empty chain — and that attempt is marked `fallback: true` in the audit; a fallback failure re-arms only that level's own cooldown and never extends another level's. If the file is absent or invalid, or the whole chain fails, behavior falls back to the legacy single-upstream path (fail-open). Read once at extension load; run `/reload` after editing. Runtime data — never committed. See [CONTEXT.md](CONTEXT.md) for the glossary (Upstream / Failover / Cooldown) and [docs/adr/0001-upstream-failover.md](docs/adr/0001-upstream-failover.md) for the design decision.
 
+## Transport: selfhost vs builtin (v0.10.0)
+
+Two evaluation transports are available; `_global.transport` in `compliance-rules.json` selects one (default `"selfhost"`, any other value silently falls back):
+
+- **`selfhost`** (default) — the package's own curl-based client (`jev/client.ts`) with the optional multi-upstream failover chain (`upstreams.json`). Requires `JEV_AI_API_KEY` + `JEV_AI_BASE_URL` as before.
+- **`builtin`** — evaluation goes through pi's built-in classifier platform (`ctx.modelRegistry.classify`, requires pi ≥ 0.99). pi resolves credentials itself (`--api-key` → `auth.json` → `models.json` → env), so this package holds no key or baseUrl for it. The upstream chain becomes `_global.builtinChain` — an ordered list of `{provider, model}` entries (default `[{"provider":"typesafe","model":"jev-latest"}]`; e.g. add `{"provider":"opencode","model":"jev-1.13-free"}` as a second level). Each entry is tried exactly once with client-side retries disabled (`maxRetries: 0`); an entry that errors, times out, returns unusable answers, or cannot even be resolved moves on to the next; if the whole chain fails the dispatch is allowed through (fail-open). pi ships the classifier models built-in, but each provider still requires its own credential (e.g. env `TYPESAFE_API_KEY` or `OPENCODE_API_KEY`, or an `auth.json` entry).
+
+Differences from selfhost: the audit `model` field records the winning chain entry as `<provider>/<model>` (not the response-body model id); `usage` is mapped from pi's `{input, output}` counters; in builtin mode `jev_ask`'s `model` parameter is accepted but ignored (each chain entry uses its own model); `jev_models` still queries the selfhost endpoint only.
+
 ## Fail-open
 
 If the JEV endpoint is unreachable or not configured, the API key is missing, or the rules file is malformed, dispatches are **allowed through**. The gate never blocks on its own failure.
@@ -183,6 +192,15 @@ JEV_AI_MODEL=可选之模型覆盖
 创建 `~/.pi/agent/jev-comp/upstreams.json`（权限 600；样例：[examples/upstreams.sample.json](examples/upstreams.sample.json)，内含 `typesafe` 备级示例）即可列出按序上游。每项形 `{name, baseUrl, apiKey, model, proxy?}`——`name` 须非空且唯一；各级可选 `proxy` 覆盖代理，缺省走既有 `JEV_AI_PROXY` 链。顶层 `timeoutMs`（缺省 5000——按级作 `curl --max-time`）与 `cooldownMs`（缺省 30000）须为正整数。
 
 `ask()` 依序尝试——每级恰一发、同一端绝不重发、绝不退避。切换至下一级**仅**发生于：连接败、超时、HTTP 5xx、429、401、403、404 及 200 坏体。`402`、`422`、其余一切 4xx（400/405/408/409/…）、`3xx` 与 `not_configured` 立即抛出，对后续各级零请求。唯连接级败北（network／超时／5xx）会使端点入冷却；429 与其余 4xx 绝不冷却。冷却窗口内该级被跳过——零 HTTP 请求、审计记 `{name, kind: "cooldown"}`；窗口届满即恢复尝试（冷却表仅存内存——重启即忘）。各级皆在冷却时，仍保底真发首位——绝不空链——该次尝试于审计标 `fallback: true`；保底失败只续该级自身之钟，绝不延长他级。档不存在或非法、或全链败尽，均回旧单端点链路（fail-open）。扩展加载时读一次，改后在 pi 内 `/reload`。运行时数据，不入库。术语表（Upstream / Failover / Cooldown）见 [CONTEXT.md](CONTEXT.md)，设计决策见 [docs/adr/0001-upstream-failover.md](docs/adr/0001-upstream-failover.md)。
+
+### 传输双路：selfhost 与 builtin（v0.10.0）
+
+求值传输有二，`compliance-rules.json` 之 `_global.transport` 择之（缺省 `"selfhost"`，非法值静默回缺省）：
+
+- **`selfhost`**（缺省）——本仓自管 curl 链（`jev/client.ts`）＋可选多上游 failover（`upstreams.json`）。仍须 `JEV_AI_API_KEY` ＋ `JEV_AI_BASE_URL`。
+- **`builtin`**——求值改走 pi 内建 classifier 平台（`ctx.modelRegistry.classify`，须 pi ≥ 0.99）。凭据由 pi 自解（`--api-key` → `auth.json` → `models.json` → env），本仓不为之持 key/baseUrl。上游链改为 `_global.builtinChain`——`{provider, model}` 条目之有序数组（缺省 `[{"provider":"typesafe","model":"jev-latest"}]`，可加 `{"provider":"opencode","model":"jev-1.13-free"}` 为第二级）。每级恰一发且客户端重试关断（`maxRetries: 0`）；某级出错、超时、答案不可用乃至不可解析，皆切下一级；全链败尽则放行（fail-open）。pi 虽内建 classifier 模型，各家仍须自配凭据（如 env `TYPESAFE_API_KEY`／`OPENCODE_API_KEY`，或 `auth.json` 条目）。
+
+与 selfhost 之异：审计 `model` 字段记胜出条目名 `<provider>/<model>`（非响应体模型 id）；`usage` 由 pi 之 `{input, output}` 映射而来；builtin 模式下 `jev_ask` 之 `model` 参数接受但忽略（各级用自身模型）；`jev_models` 仍唯查 selfhost 端点。
 
 ### Fail-open
 
