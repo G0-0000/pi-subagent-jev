@@ -115,10 +115,12 @@ export default function (pi: ExtensionAPI) {
     const agent = input.agent;
     const task = input.task;
     if (typeof agent !== "string" || typeof task !== "string") return;
-    if (!(agent in config.agents)) return;
+    // 无专属组之 agent 亦受查：配置档有 `_all` 全局规则时凡派单皆审（fail-open：无规则则放行）
+    if (!(agent in config.agents) && !(config.all && config.all.rules.length > 0)) return;
     try {
       const res = await checkDispatch(agent, task, {
         ruleSets: config.agents,
+        allRules: config.all ?? undefined,
         auditProbabilities: config.global.auditProbabilities,
         trainingLog: config.global.trainingLog,
       });

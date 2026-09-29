@@ -1,6 +1,6 @@
 {
   "name": "pi-subagent-jev",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "JEV System One compliance gate for pi subagent dispatches",
   "keywords": ["pi-package", "pi-extension", "jev", "compliance", "subagent"],
   "license": "MIT",

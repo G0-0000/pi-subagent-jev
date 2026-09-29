@@ -8,7 +8,26 @@
         "true": "The wording is vague, self-contradictory, or invites work beyond the stated scope",
         "false": "The wording is precise and the requested work stays within the stated scope"
       }
+    },
+    "G001": {
+      "label": "任务目标明确（全局基线示例）",
+      "instructions": "Does the task state a clear, concrete objective for the agent to accomplish?",
+      "criteria": {
+        "true": "The task names a concrete deliverable or outcome — what to produce, check, or report — and the agent can tell when it is done",
+        "false": "The task is aimless or generic — 'take a look', 'check things out' — with no named objective or completion criterion"
+      }
     }
+  },
+  "_all": {
+    "rules": [
+      {
+        "id": "G1",
+        "question": "G001",
+        "blockWhen": "below",
+        "threshold": 0.7,
+        "message": "任务目标不明——凡派单皆须给出明确标的"
+      }
+    ]
   },
   "delegate": {
     "agentDesc": "a file-editing agent without shell access",

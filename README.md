@@ -39,7 +39,9 @@ Rather not edit files by hand? Just ask pi to 配置 subagent 规则 — the bun
 
 Nothing to do — once installed and configured, every subagent dispatch is evaluated automatically. A blocked dispatch returns the violation list to the main agent.
 
-Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (full sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, a `question` (the id of a shared entry in the top-level `_questions` library, e.g. `Q004`) — or, instead, inline `instructions` (the question asked of JEV) plus optional `criteria` (`{true, false}` natural-language answer-branch guides passed through to JEV to disambiguate borderline questions) — and a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability) and a `message` (returned on violation). The top-level `_questions` map holds one entry per distinct question, `{ label?, instructions, criteria? }`, where `label` is a human-readable note the code ignores; rules asking the same question all reference the same id, so they are edited in one place. A resolvable `question` wins over inline fields, an unknown id falls back to them, and a rule left with no question at all is skipped (fail-open). Rules are keyed by subagent name; only dispatches to a named agent are evaluated. The reserved top-level keys `_global` (global switches, e.g. `{ "auditProbabilities": true }`) and `_questions` are never treated as agent names. After editing, `/reload` in pi.
+> **Breaking change in v0.7.0** — the built-in delegate rules were removed: the config file is now the only source of rules, so an install without `compliance-rules.json` performs no checks at all. Create it via the bundled skill or by hand.
+
+Rules live in `~/.pi/agent/jev-comp/compliance-rules.json` (schema sample: [examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)). Each rule has an `id`, a `question` (the id of a shared entry in the top-level `_questions` library, e.g. `Q004`) — or, instead, inline `instructions` (the question asked of JEV) plus optional `criteria` (`{true, false}` natural-language answer-branch guides passed through to JEV to disambiguate borderline questions) — and a `blockWhen` (`below` / `above`), a `threshold` (0–1 probability) and a `message` (returned on violation). The top-level `_questions` map holds one entry per distinct question, `{ label?, instructions, criteria? }`, where `label` is a human-readable note the code ignores; rules asking the same question all reference the same id, so they are edited in one place. A resolvable `question` wins over inline fields, an unknown id falls back to them, and a rule left with no question at all is skipped (fail-open). Rules are keyed by subagent name. A reserved top-level `_all` group holds **global rules evaluated on every dispatch** — including agents with no group of their own (their state describes them as `a sub-agent`); the agent's own rules merge on top, and on a rule-id collision the agent's rule silently wins (convention: prefix global rule/question ids with `G`, e.g. `G1`/`G001`). The reserved top-level keys `_global` (global switches, e.g. `{ "auditProbabilities": true }`), `_questions`, and `_all` are never treated as agent names. **The code ships no built-in rules: with no config file there are no checks at all (fail-open).** The config file is created by the bundled skill (say "配置 subagent 规则") or written by hand — the sample illustrates the schema, it is not a deployment source. After editing, `/reload` in pi.
 
 Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp/audit.jsonl` (one JSON object per line).
 
@@ -90,7 +92,7 @@ If the JEV endpoint is unreachable or not configured, the API key is missing, or
 npm test
 ```
 
-Zero npm dependencies; runs on Node's built-in test runner (89 tests). To recalibrate the judge thresholds, see `scripts/calibrate.ts` (it issues real API requests, so it is not run by the tests).
+Zero npm dependencies; runs on Node's built-in test runner. To recalibrate the judge thresholds, see `scripts/calibrate.ts` (it issues real API requests, so it is not run by the tests).
 
 ## License
 
@@ -139,7 +141,9 @@ JEV_AI_MODEL=可选之模型覆盖
 
 无需任何操作——装好配妥后，每次派单自动求值。被拦之派单将违规清单返予主 agent。
 
-规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（完整样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`question`（指向顶层问句库 `_questions` 之编号，如 `Q004`）——或以 `instructions`（交 JEV 之问）＋可选 `criteria`（`{true, false}` 答支判据，透传 JEV 以消歧含糊之问）内联自持——另有 `blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。顶层 `_questions` 为「一问一条」之库，每项形如 `{ label?, instructions, criteria? }`，其中 `label` 仅供人读、代码一概忽略；凡同问之规则皆引同一编号，故改则一处生效。`question` 可解析者优先于内联字段，编号悬空则回退内联，两者皆无之规则被跳过（fail-open）。规则按 subagent 名分组；唯派单至具名 agent 方求值。顶层保留键 `_global`（全局开关，如 `{ "auditProbabilities": true }`）与 `_questions` 皆不视作 agent 名。改后于 pi 内 `/reload`。
+> **v0.7.0 破坏性变更**——内建 delegate 规则已废：配置档成规则唯一来源，无 `compliance-rules.json` 之安装零检查。请以包内 skill 或手书建之。
+
+规则置于 `~/.pi/agent/jev-comp/compliance-rules.json`（schema 样例：[examples/compliance-rules.sample.json](examples/compliance-rules.sample.json)）。每规则有 `id`、`question`（指向顶层问句库 `_questions` 之编号，如 `Q004`）——或以 `instructions`（交 JEV 之问）＋可选 `criteria`（`{true, false}` 答支判据，透传 JEV 以消歧含糊之问）内联自持——另有 `blockWhen`（`below` / `above`）、`threshold`（0–1 概率）与 `message`（命中时返回之文案）。顶层 `_questions` 为「一问一条」之库，每项形如 `{ label?, instructions, criteria? }`，其中 `label` 仅供人读、代码一概忽略；凡同问之规则皆引同一编号，故改则一处生效。`question` 可解析者优先于内联字段，编号悬空则回退内联，两者皆无之规则被跳过（fail-open）。规则按 subagent 名分组。顶层保留键 `_all` 为**全局规则组——凡派单皆受查**，无专属组之 agent 亦然（其 state 述语固定为 `a sub-agent`）；agent 专属规则叠加其上，规则 id 相撞时专属者静默优先（约定全局规则号/问句号以 `G` 冠之，如 `G1`/`G001`）。顶层保留键 `_global`（全局开关，如 `{ "auditProbabilities": true }`）、`_questions`、`_all` 皆不视作 agent 名。**代码零内建规则：无配置档即零检查（fail-open）。** 配置档经包内 skill（言「配置 subagent 规则」）创建或手书——样例仅示 schema，非部署之源。改后于 pi 内 `/reload`。
 
 每次求值——放行或拦截——皆追加于 `~/.pi/agent/jev-comp/audit.jsonl`（每行一 JSON 对象）。
 
@@ -190,7 +194,7 @@ JEV 端点不可达或未配置、API key 缺失、规则档损坏时，派单�
 npm test
 ```
 
-零 npm 依赖，Node 内建测试器（89 条测试）。重校准判定阈值见 `scripts/calibrate.ts`（发真实 API 请求，故不入测试）。
+零 npm 依赖，Node 内建测试器。重校准判定阈值见 `scripts/calibrate.ts`（发真实 API 请求，故不入测试）。
 
 ### 许可证
 
