@@ -45,6 +45,8 @@ const DEFAULT_BLOCKED_TOOLS = [
   "research_checkpoint",
   "gbrain_search",
   "gbrain_capture",
+  "mcp",
+  "mcp__gbrain",
 ];
 
 interface OrchestratorConfig {
