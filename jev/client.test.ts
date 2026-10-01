@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ask, getAskMeta, listModels, JevError } from "./client.ts";
-import { CooldownTracker, type FailoverConfig } from "./failover.ts";
+import { CooldownTracker, loadFailoverConfig, type FailoverConfig } from "./failover.ts";
 
 /** 由若干 mock server 拼一条 failover 链路配置（独立 tracker，测试间互不泄漏）。 */
 function chain(
@@ -914,6 +914,125 @@ test("㉛ failover：正常切换成功之败级记录无 fallback 字段", asyn
   } finally {
     await srv1.close();
     await srv2.close();
+  }
+});
+
+// ── quick-probe 单发直测（upstream 名 → 恰一发至该上游，bypass 链序/冷却/切换）──
+
+/** 写一份临时 upstreams.json（两上游），返其路径；调用方负责清理。 */
+function writeUpstreamsJson(
+  entries: { name: string; url: string; apiKey: string; model: string }[]
+): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jev-upstreams-"));
+  const p = path.join(dir, "upstreams.json");
+  fs.writeFileSync(
+    p,
+    JSON.stringify({
+      timeoutMs: 5000,
+      cooldownMs: 30000,
+      upstreams: entries.map((e) => ({
+        name: e.name,
+        baseUrl: e.url,
+        apiKey: e.apiKey,
+        model: e.model,
+      })),
+    })
+  );
+  return p;
+}
+
+test("㉝ quick-probe：upstream 给名 → 恰一发至该上游（链中他级零请求），结果带 ms", async () => {
+  const srvA = await startServer((_req, _b, res) => ok(res));
+  const srvB = await startServer((_req, body, res) => {
+    assertBodyModel(body, "model-probe-b"); // 上游自身 model 生效
+    ok(res);
+  });
+  const upPath = writeUpstreamsJson([
+    { name: "9router-a", url: srvA.url, apiKey: "sk-secret-a", model: "model-a" },
+    { name: "9router-b", url: srvB.url, apiKey: "sk-secret-b", model: "model-probe-b" },
+  ]);
+  try {
+    const r = await ask({
+      state: "s",
+      questions: Q,
+      upstream: "9router-b",
+      upstreamsPath: upPath,
+    });
+    assert.equal((r.answers.q as { noul: number }).noul, 0.5);
+    assert.equal(typeof r.ms, "number"); // 耗时随结果返回
+    assert.ok(r.ms! >= 0);
+    assert.equal(srvB.requests(), 1); // 恰一发
+    assert.equal(srvA.requests(), 0); // 链中他级零请求（bypass 链序）
+    assert.equal(getAskMeta(r)?.upstream, "9router-b");
+  } finally {
+    await srvA.close();
+    await srvB.close();
+    fs.rmSync(path.dirname(upPath), { recursive: true, force: true });
+  }
+});
+
+test("㉞ quick-probe：未知名 → unknown_upstream，报错仅列名（绝无 baseUrl/apiKey 之值）", async () => {
+  const srvA = await startServer((_req, _b, res) => ok(res));
+  const upPath = writeUpstreamsJson([
+    { name: "9router-a", url: srvA.url, apiKey: "sk-secret-a", model: "model-a" },
+    { name: "9router-b", url: "http://127.0.0.1:9", apiKey: "sk-secret-b", model: "model-b" },
+  ]);
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, upstream: "ghost", upstreamsPath: upPath }),
+      (e: unknown) => {
+        assert.ok(e instanceof JevError && e.kind === "unknown_upstream");
+        assert.ok((e as JevError).message.includes("9router-a"));
+        assert.ok((e as JevError).message.includes("9router-b"));
+        assert.ok(!(e as JevError).message.includes("sk-secret-a")); // 绝不泄 key
+        assert.ok(!(e as JevError).message.includes("sk-secret-b"));
+        assert.ok(!(e as JevError).message.includes(srvA.url)); // 绝不泄 baseUrl
+        return true;
+      }
+    );
+    assert.equal(srvA.requests(), 0); // 未匹配：零请求
+  } finally {
+    await srvA.close();
+    fs.rmSync(path.dirname(upPath), { recursive: true, force: true });
+  }
+});
+
+test("㉟ quick-probe：upstreams.json 缺失 → unknown_upstream（fail-open 仅施于派单拦截，直测为量具须显报）", async () => {
+  await assert.rejects(
+    ask({
+      state: "s",
+      questions: Q,
+      upstream: "any",
+      upstreamsPath: path.join(
+        os.tmpdir(),
+        `jev-nonexistent-upstreams-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      ),
+    }),
+    (e: unknown) => e instanceof JevError && e.kind === "unknown_upstream"
+  );
+});
+
+test("㊱ quick-probe：直测不动冷却表（失败后同 tracker 链上该上游仍可正常调度）", async () => {
+  const srv = await startServer((_req, _b, res) => {
+    res.statusCode = 502;
+    res.end("{}");
+  });
+  const upPath = writeUpstreamsJson([
+    { name: "probe-target", url: srv.url, apiKey: "sk-secret", model: "model-x" },
+  ]);
+  const tracker = new CooldownTracker();
+  const { failover } = chain([{ name: "probe-target", url: srv.url }]);
+  try {
+    await assert.rejects(
+      ask({ state: "s", questions: Q, upstream: "probe-target", upstreamsPath: upPath, tracker }),
+      (e: unknown) => e instanceof JevError && e.kind === "upstream"
+    );
+    // 直测零冷却读写：同 tracker 视该上游从未失败（eligible 仍含之）
+    assert.deepEqual(tracker.eligible(["probe-target"]), ["probe-target"]);
+    assert.equal(loadFailoverConfig(upPath)?.upstreams[0].name, "probe-target"); // 配置档解析无碍
+  } finally {
+    await srv.close();
+    fs.rmSync(path.dirname(upPath), { recursive: true, force: true });
   }
 });
 

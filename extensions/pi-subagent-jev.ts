@@ -32,6 +32,14 @@ const RULES_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "compl
 // 有界（100 条，满则逐出最旧）；与规则配置同生命周期（/reload 重导入即重置）。
 const pendingWarnings = new WarningStore();
 
+// jev_ask 缺省探针载荷（state/questions 可全省，单给 upstream 名即可快测一上游）：
+// 一则具体小修任务 ＋ 一个 noul 问句，足以观察端点连通与判定行为。
+const DEFAULT_PROBE_STATE =
+  "Fix the typo in README.md line 12 where 'teh' should be 'the'.";
+const DEFAULT_PROBE_QUESTIONS = {
+  T1: { type: "noul" as const, instructions: "Does the task name a concrete file path?" },
+};
+
 export default function (pi: ExtensionAPI) {
   // 规则配置在扩展加载时读一次（改后 /reload 生效）；trainingLog 开关即取自此处
   const config = loadRuleSets(RULES_PATH);
@@ -69,19 +77,24 @@ export default function (pi: ExtensionAPI) {
     name: "jev_ask",
     label: "Jev Ask",
     description:
-      "对一份 state 并行求值一组类型化问题（noul/choice/score），返回 {model, answers, usage}。questions 形如 {key:{type:'noul',instructions:'...'}}。",
+      "对一份 state 并行求值一组类型化问题（noul/choice/score），返回 {model, answers, usage, ms}。questions 形如 {key:{type:'noul',instructions:'...'}}。state/questions 皆有内建缺省探针载荷，全省时可直接快测；upstream 给 upstreams.json 中之名即单发直测该上游（bypass 链序/冷却/切换）。",
     parameters: Type.Object({
-      state: Type.String({ description: "待求值的材料文本" }),
-      questions: Type.Record(Type.String(), Type.Unknown(), {
-        description: "问题 map，key 自取；每题为 {type:'noul'|'choice'|'score', instructions, ...}",
-      }),
+      state: Type.Optional(Type.String({ description: "待求值的材料文本（缺省用内建探针载荷）" })),
+      questions: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
+        description: "问题 map，key 自取；每题为 {type:'noul'|'choice'|'score', instructions, ...}（缺省用内建探针载荷）",
+      })),
       model: Type.Optional(Type.String({ description: "模型 ID，默认 oc/jev-1.13-free（transport=builtin 时忽略，链路由规则配置 _global.builtinChain 定）" })),
+      upstream: Type.Optional(Type.String({ description: "upstreams.json 中之名，单发直测该上游（transport=builtin 时接受但忽略）；名不存则报错并列出可用名" })),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       try {
+        const effState = params.state ?? DEFAULT_PROBE_STATE;
+        const effQuestions =
+          (params.questions as Parameters<typeof ask>[0]["questions"] | undefined) ??
+          DEFAULT_PROBE_QUESTIONS;
         const req = {
-          state: params.state,
-          questions: params.questions as Parameters<typeof ask>[0]["questions"],
+          state: effState,
+          questions: effQuestions,
           model: params.model,
           // 取消信号（有则）随求值透传：内建链由 builtin-transport 并入 classifyFn options；
           // selfhost 链不识别此键、忽略之（请求形状不受影响）
@@ -90,7 +103,10 @@ export default function (pi: ExtensionAPI) {
         // transport==="builtin" → 内建 askFn（model 参数于内建链忽略，链路条目各用自身模型）；
         // 其余（含接线异常落回 undefined）走既有自管 curl 链，路径逐字不变
         const builtinAsk = buildBuiltinAsk(ctx);
-        const result = builtinAsk ? await builtinAsk(req) : await ask(req);
+        // upstream 仅自管链识别：builtin 链接受但忽略（同 model 参数之待遇）
+        const result = builtinAsk
+          ? await builtinAsk(req)
+          : await ask(params.upstream ? { ...req, upstream: params.upstream } : req);
         // 训练数据记录（开关开时）：state ＋ 问句 ＋ 返回答案逐字留存。
         // 记录失败静默吞下，绝不影响工具结果（fail-open，红线三）。
         if (config.global.trainingLog) {
@@ -98,8 +114,8 @@ export default function (pi: ExtensionAPI) {
             writeTrainingLine(
               askTrainingLine({
                 model: result.model,
-                state: params.state,
-                questions: params.questions,
+                state: effState,
+                questions: effQuestions,
                 answers: result.answers,
               })
             );

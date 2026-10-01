@@ -10,6 +10,7 @@ import pathMod from "node:path";
 import {
   classifyFailure,
   defaultCooldownTracker,
+  loadFailoverConfig,
   type AttemptRecord,
   type CooldownTracker,
   type FailoverConfig,
@@ -45,6 +46,8 @@ export type SystemOneResult = {
   model: string;
   answers: Record<string, Answer>;
   usage: Usage;
+  /** 本次求值之耗时毫秒（整数；自管链各路径皆附，内建链无此字段） */
+  ms?: number;
 };
 
 export type JevErrorKind =
@@ -56,6 +59,7 @@ export type JevErrorKind =
   | "upstream"
   | "timeout"
   | "network"
+  | "unknown_upstream"
   | "unexpected";
 
 export class JevError extends Error {
@@ -355,6 +359,14 @@ export type AskParams = {
   failover?: FailoverConfig | null;
   /** 冷却跳过表；缺省用进程内共享 defaultCooldownTracker */
   tracker?: CooldownTracker;
+  /**
+   * 单发直测（quick-probe）：给 upstreams.json 中某 NAME 时，恰发一发至该上游——
+   *  bypass 链序、冷却与切换（红线：同端绝不重发）。仅自管链识别，内建链忽略。
+   *  与显式 baseUrl/apiKey 同传时后者优先（量具读数不混入他端点）。
+   */
+  upstream?: string;
+  /** upstreams.json 路径覆写（仅供测试；缺省走 failover.ts 之 DEFAULT_UPSTREAMS_PATH） */
+  upstreamsPath?: string;
 } & JevConfig;
 
 // ── 传输 meta（胜出 upstream 与历次尝试）──
@@ -398,10 +410,45 @@ function withAttempts(err: JevError, attempts: AttemptRecord[]): JevError {
 /** System One：对 state 求值一组类型化问题。不自动重试（同一 upstream 之 POST 绝不重发）；
  *  携 failover 链路时按序切换上游，每级一发。 */
 export async function ask(params: AskParams): Promise<SystemOneResult> {
-  const { state, questions, model, failover, tracker, ...cfg } = params;
+  const { state, questions, model, failover, tracker, upstream, upstreamsPath, ...cfg } = params;
   // 显式 baseUrl/apiKey（如校准脚本）绕开链路——量具读数不得混入他端点。
   const chain =
     failover && cfg.baseUrl === undefined && cfg.apiKey === undefined ? failover : null;
+
+  // quick-probe 单发直测：upstream 给名时恰发一发至该上游——bypass 链序、冷却与切换。
+  // 零冷却读写（tracker 不触）；未匹配之名报 unknown_upstream（仅列名，绝不泄 baseUrl/apiKey）。
+  if (upstream !== undefined && cfg.baseUrl === undefined && cfg.apiKey === undefined) {
+    const fo = loadFailoverConfig(upstreamsPath);
+    const up = fo?.upstreams.find((u) => u.name === upstream);
+    if (!up) {
+      const names = fo ? fo.upstreams.map((u) => u.name) : [];
+      throw new JevError(
+        "unknown_upstream",
+        names.length > 0
+          ? `upstreams.json 中无名为 "${upstream}" 之上游；可用名：${names.join(", ")}`
+          : `upstreams.json 缺失或无效，无法直测上游 "${upstream}"`
+      );
+    }
+    const t0 = Date.now();
+    const res = (await request(
+      "POST",
+      "/v1/systemone",
+      { model: model ?? up.model, state, questions },
+      {
+        baseUrl: up.baseUrl,
+        apiKey: up.apiKey,
+        proxy: up.proxy, // 缺省 → resolveConfig 走既有 JEV_AI_PROXY 链
+        timeoutMs: fo.timeoutMs,
+      }
+    )) as SystemOneResult;
+    if (!res || typeof res !== "object" || !res.answers) {
+      throw new JevError("unexpected", "响应缺少 answers 字段");
+    }
+    res.ms = Math.max(0, Math.round(Date.now() - t0));
+    setAskMeta(res, { upstream: up.name, attempts: [] });
+    return res;
+  }
+
   if (!chain) {
     // 旧单端点链路（与历版逐字节一致）。
     // model 解析序：显式参数 > 进程 env JEV_AI_MODEL > env 档 > 内建默认（env 档路径与 apiKey 同序）。
@@ -410,6 +457,7 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
       (process.env.JEV_AI_MODEL ||
         readEnvFile(resolveEnvFilePath(cfg)).JEV_AI_MODEL ||
         "oc/jev-1.13-free");
+    const t0 = Date.now();
     const res = (await request(
       "POST",
       "/v1/systemone",
@@ -419,6 +467,7 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
     if (!res || typeof res !== "object" || !res.answers) {
       throw new JevError("unexpected", "响应缺少 answers 字段");
     }
+    res.ms = Math.max(0, Math.round(Date.now() - t0));
     return res;
   }
 
@@ -461,6 +510,7 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
         throw new JevError("unexpected", "响应缺少 answers 字段");
       }
       tr.markSuccess(up.name);
+      res.ms = Math.max(0, Math.round(Date.now() - t0));
       setAskMeta(res, {
         upstream: up.name,
         attempts: [...attempts],

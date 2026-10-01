@@ -53,7 +53,7 @@ A second reserved switch, `_global.trainingLog` (default `false`), records train
 
 ### Tools
 
-- `jev_ask` — parameters: `state` (the material text to evaluate), `questions` (a map of key → `{type, instructions}`), optional `model`.
+- `jev_ask` — parameters: `state` (the material text to evaluate), `questions` (a map of key → `{type, instructions}`), optional `model`. Both `state` and `questions` are optional and fall back to a built-in probe payload (a small typo-fix task plus one `noul` question), so passing only `upstream` suffices for a quick probe. Optional `upstream` (a NAME from `upstreams.json`) sends exactly one request straight to that named upstream — bypassing failover chain order, cooldown, and switching — for quick single-upstream testing (in builtin transport mode the parameter is accepted but ignored). The result carries an `ms` field with the elapsed milliseconds.
 - `jev_models` — no parameters; lists the endpoint's connected models.
 
 ### Skill
@@ -164,7 +164,7 @@ JEV_AI_MODEL=可选之模型覆盖
 
 #### 工具
 
-- `jev_ask`——参数：`state`（待求值之材料文本）、`questions`（键 → `{type, instructions}` 之映射）、可选 `model`。
+- `jev_ask`——参数：`state`（待求值之材料文本）、`questions`（键 → `{type, instructions}` 之映射）、可选 `model`。`state` 与 `questions` 皆可省，缺省用内建探针载荷（一则小改错任务＋一个 `noul` 问句），故单给 `upstream` 即可快测。可选 `upstream`（`upstreams.json` 中之名）单发直测该上游——bypass failover 链序、冷却与切换；builtin 传输下接受但忽略。结果附 `ms` 字段（耗时毫秒）。
 - `jev_models`——无参数；列端点已连模型。
 
 #### Skill
