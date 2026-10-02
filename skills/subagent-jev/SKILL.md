@@ -16,7 +16,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
    - 插件自管端点：建 env 档 `~/.config/jev-comp/env`（权限 600），三键 `JEV_AI_API_KEY`（**嘱用户亲笔自填**，agent 全程不经手其值）／`JEV_AI_BASE_URL`（必配）／`JEV_AI_MODEL`（可选）；
    - 走 pi 内建 classifier（须 pi ≥ 0.99）：凭据 pi 代管、插件零 key，链路于规则档 `_global.builtinChain` 配置。
    详见 README「Install」与「Transport: selfhost vs builtin」节。
-3. **试连通**——空参直唤 `jev_ask` 即可：state/questions 不填，内建探针载荷自代；返得概率即端点、key、模型三俱通，结果附 `ms` 耗时，端点快慢立见。有 `upstreams.json` 者，唯传 `upstream:"<名>"` 即单发直测该上游（bypass 链序与冷却，唯自管链；builtin 链此参被忽略），逐枚快测宜排快慢。报错先排查配置，勿续；可以 `jev_models` 列端点已连模型，供用户拣选 model id。
+3. **试连通**——空参直唤 `jev_ask` 即可：state/questions 不填，内建探针载荷自代；返得概率即端点、key、模型三俱通，结果附 `ms` 耗时，端点快慢立见。有 `upstreams.json` 者，唯传 `upstream:"<名>"` 即单发直测该上游（bypass 链序与冷却，唯自管链；builtin 链此参被忽略），逐枚快测宜排快慢。报错先排查配置，勿续。
 4. **生效**——于 pi 内 `/reload`。
 
 （可选：多上游 failover 档 `~/.pi/agent/jev-comp/upstreams.json` 聚多枚 key，宜用户手书，本 skill 不代写。样例见 `examples/upstreams.sample.json`，详见 README「多上游 failover」节。）

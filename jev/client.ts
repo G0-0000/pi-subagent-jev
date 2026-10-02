@@ -533,8 +533,3 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
   }
   throw withAttempts(lastErr, attempts); // 全链败尽
 }
-
-/** 已连接模型列表。 */
-export async function listModels(cfg: JevConfig = {}): Promise<unknown> {
-  return request("GET", "/v1/models", undefined, cfg);
-}

@@ -7,7 +7,7 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) package that gates sub
 ## Features
 
 - **Dispatch compliance gate** — when the main agent dispatches a subagent, the task text is sent to the JEV System One endpoint for evaluation. If any configured rule fires, the dispatch is blocked: every violation message is returned to the main agent as an error result, and the subagent is never spawned.
-- **`jev_ask` / `jev_models` tools** — query the decision model directly. `jev_ask` evaluates a batch of typed questions (`noul` / `choice` / `score`) against a state text; `jev_models` lists the models connected to the endpoint.
+- **`jev_ask` tool** — query the decision model directly. `jev_ask` evaluates a batch of typed questions (`noul` / `choice` / `score`) against a state text.
 - **Bundled `subagent-jev` skill** — walks you through recording endpoint/model settings and per-subagent compliance rules.
 
 ## Requirements
@@ -54,7 +54,6 @@ A second reserved switch, `_global.trainingLog` (default `false`), records train
 ### Tools
 
 - `jev_ask` — parameters: `state` (the material text to evaluate), `questions` (a map of key → `{type, instructions}`), optional `model`. Both `state` and `questions` are optional and fall back to a built-in probe payload (a small typo-fix task plus one `noul` question), so passing only `upstream` suffices for a quick probe. Optional `upstream` (a NAME from `upstreams.json`) sends exactly one request straight to that named upstream — bypassing failover chain order, cooldown, and switching — for quick single-upstream testing (in builtin transport mode the parameter is accepted but ignored). The result carries an `ms` field with the elapsed milliseconds.
-- `jev_models` — no parameters; lists the endpoint's connected models.
 
 ### Skill
 
@@ -89,7 +88,7 @@ Two evaluation transports are available; `_global.transport` in `compliance-rule
 - **`selfhost`** (default) — the package's own curl-based client (`jev/client.ts`) with the optional multi-upstream failover chain (`upstreams.json`). Requires `JEV_AI_API_KEY` + `JEV_AI_BASE_URL` as before.
 - **`builtin`** — evaluation goes through pi's built-in classifier platform (`ctx.modelRegistry.classify`, requires pi ≥ 0.99). pi resolves credentials itself (`--api-key` → `auth.json` → `models.json` → env), so this package holds no key or baseUrl for it. The upstream chain becomes `_global.builtinChain` — an ordered list of `{provider, model}` entries (default `[{"provider":"typesafe","model":"jev-latest"}]`; e.g. add `{"provider":"opencode","model":"jev-1.13-free"}` as a second level). Each entry is tried exactly once with client-side retries disabled (`maxRetries: 0`); an entry that errors, times out, returns unusable answers, or cannot even be resolved moves on to the next; if the whole chain fails the dispatch is allowed through (fail-open). pi ships the classifier models built-in, but each provider still requires its own credential (e.g. env `TYPESAFE_API_KEY` or `OPENCODE_API_KEY`, or an `auth.json` entry).
 
-Differences from selfhost: the audit `model` field records the winning chain entry as `<provider>/<model>` (not the response-body model id); `usage` is mapped from pi's `{input, output}` counters; in builtin mode `jev_ask`'s `model` parameter is accepted but ignored (each chain entry uses its own model); `jev_models` still queries the selfhost endpoint only.
+Differences from selfhost: the audit `model` field records the winning chain entry as `<provider>/<model>` (not the response-body model id); `usage` is mapped from pi's `{input, output}` counters; in builtin mode `jev_ask`'s `model` parameter is accepted but ignored (each chain entry uses its own model).
 
 ## Fail-open
 
@@ -118,7 +117,7 @@ pi-subagent-jev 是一个 [pi](https://github.com/earendil-works/pi-coding-agent
 ### 功能介绍
 
 - **派单合规拦截**——主 agent 派发 subagent 时，任务文本送 JEV System One 端点求值。命中任一已配规则即拦截：违规原因逐条列出，作为错误结果返给主 agent，subagent 不被派生。
-- **`jev_ask` / `jev_models` 工具**——直查决策模型。`jev_ask` 对 state 文本求值一批类型化问题（`noul` / `choice` / `score`）；`jev_models` 列端点已连模型。
+- **`jev_ask` 工具**——直查决策模型。`jev_ask` 对 state 文本求值一批类型化问题（`noul` / `choice` / `score`）。
 - **附赠 `subagent-jev` skill**——引导录入端点/模型设置与各 subagent 之合规规则。
 
 ### 环境要求
@@ -165,7 +164,6 @@ JEV_AI_MODEL=可选之模型覆盖
 #### 工具
 
 - `jev_ask`——参数：`state`（待求值之材料文本）、`questions`（键 → `{type, instructions}` 之映射）、可选 `model`。`state` 与 `questions` 皆可省，缺省用内建探针载荷（一则小改错任务＋一个 `noul` 问句），故单给 `upstream` 即可快测。可选 `upstream`（`upstreams.json` 中之名）单发直测该上游——bypass failover 链序、冷却与切换；builtin 传输下接受但忽略。结果附 `ms` 字段（耗时毫秒）。
-- `jev_models`——无参数；列端点已连模型。
 
 #### Skill
 
@@ -200,7 +198,7 @@ JEV_AI_MODEL=可选之模型覆盖
 - **`selfhost`**（缺省）——本仓自管 curl 链（`jev/client.ts`）＋可选多上游 failover（`upstreams.json`）。仍须 `JEV_AI_API_KEY` ＋ `JEV_AI_BASE_URL`。
 - **`builtin`**——求值改走 pi 内建 classifier 平台（`ctx.modelRegistry.classify`，须 pi ≥ 0.99）。凭据由 pi 自解（`--api-key` → `auth.json` → `models.json` → env），本仓不为之持 key/baseUrl。上游链改为 `_global.builtinChain`——`{provider, model}` 条目之有序数组（缺省 `[{"provider":"typesafe","model":"jev-latest"}]`，可加 `{"provider":"opencode","model":"jev-1.13-free"}` 为第二级）。每级恰一发且客户端重试关断（`maxRetries: 0`）；某级出错、超时、答案不可用乃至不可解析，皆切下一级；全链败尽则放行（fail-open）。pi 虽内建 classifier 模型，各家仍须自配凭据（如 env `TYPESAFE_API_KEY`／`OPENCODE_API_KEY`，或 `auth.json` 条目）。
 
-与 selfhost 之异：审计 `model` 字段记胜出条目名 `<provider>/<model>`（非响应体模型 id）；`usage` 由 pi 之 `{input, output}` 映射而来；builtin 模式下 `jev_ask` 之 `model` 参数接受但忽略（各级用自身模型）；`jev_models` 仍唯查 selfhost 端点。
+与 selfhost 之异：审计 `model` 字段记胜出条目名 `<provider>/<model>`（非响应体模型 id）；`usage` 由 pi 之 `{input, output}` 映射而来；builtin 模式下 `jev_ask` 之 `model` 参数接受但忽略（各级用自身模型）。
 
 ### Fail-open
 

@@ -4,7 +4,7 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ask, getAskMeta, listModels, JevError } from "./client.ts";
+import { ask, getAskMeta, JevError } from "./client.ts";
 import { CooldownTracker, loadFailoverConfig, type FailoverConfig } from "./failover.ts";
 
 /** 由若干 mock server 拼一条 failover 链路配置（独立 tracker，测试间互不泄漏）。 */
@@ -288,7 +288,7 @@ test("⑩ 429 时服务端仅收到 1 次请求（无自动重试）", async () 
   }
 });
 
-test("⑪ env 档回退：进程 env 缺席＋临时 env 档有值 → ask/listModels 以档内 key 成行", async () => {
+test("⑪ env 档回退：进程 env 缺席＋临时 env 档有值 → ask 以档内 key 成行", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jev-test-"));
   const envPath = path.join(dir, "env");
   fs.writeFileSync(
@@ -301,12 +301,8 @@ test("⑪ env 档回退：进程 env 缺席＋临时 env 档有值 → ask/listM
   const savedKey = process.env.JEV_AI_API_KEY; // 隔离进程 env key，确保断言档内 key
   delete process.env.JEV_AI_API_KEY;
   process.env.JEV_AI_ENV_FILE = envPath;
-  const srv = await startServer((req, _b, res) => {
-    assert.equal(req.headers["authorization"], "Bearer file-key-123");
-    if (req.method === "GET") {
-      res.end(JSON.stringify({ models: ["oc/jev-1.13-free"] }));
-      return;
-    }
+  const srv = await startServer((_req, _b, res) => {
+    assert.equal(_req.headers["authorization"], "Bearer file-key-123");
     res.end(JSON.stringify({ model: "jev-1.13-free", answers: { q: { noul: 0.5 } }, usage: {} }));
   });
   try {
@@ -316,8 +312,6 @@ test("⑪ env 档回退：进程 env 缺席＋临时 env 档有值 → ask/listM
       baseUrl: srv.url,
     });
     assert.equal((r.answers.q as { noul: number }).noul, 0.5);
-    const m = (await listModels({ baseUrl: srv.url })) as { models: string[] };
-    assert.deepEqual(m.models, ["oc/jev-1.13-free"]);
   } finally {
     await srv.close();
     if (saved !== undefined) process.env.JEV_AI_ENV_FILE = saved;
@@ -336,27 +330,6 @@ test("⑫ env 档不存在（显式 envFile 指向不存在路径）→ not_conf
       baseUrl: "http://127.0.0.1:9",
       envFile: path.join(os.tmpdir(), `jev-nonexistent-${Date.now()}-${Math.random().toString(36).slice(2)}`),
     }),
-    (e: unknown) => e instanceof JevError && e.kind === "not_configured"
-  );
-}));
-
-test("附加：listModels GET 正常解析", async () => {
-  const srv = await startServer((req, _b, res) => {
-    assert.equal(req.method, "GET");
-    assert.ok((req.url || "").includes("/v1/models"));
-    res.end(JSON.stringify({ models: ["jev-latest", "jev-1.13.0"] }));
-  });
-  try {
-    const r = (await listModels({ baseUrl: srv.url, apiKey: "k" })) as { models: string[] };
-    assert.deepEqual(r.models, ["jev-latest", "jev-1.13.0"]);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("附加：listModels 无 key（进程 env 缺席＋env 档不存在）→ not_configured", withNoEnvKey(async () => {
-  await assert.rejects(
-    listModels({ baseUrl: "http://127.0.0.1:9" }),
     (e: unknown) => e instanceof JevError && e.kind === "not_configured"
   );
 }));

@@ -1,5 +1,5 @@
-// pi-subagent-jev 单扩展：jev_ask / jev_models 工具 ＋ subagent 派单合规拦截。
-// 工具部分：对一份 state 并行求值类型化问题（jev_ask）、列端点已连模型（jev_models）。
+// pi-subagent-jev 单扩展：jev_ask 工具 ＋ subagent 派单合规拦截。
+// 工具部分：对一份 state 并行求值类型化问题（jev_ask）。
 // 拦截部分：钩 tool_call 事件拦截他扩展注册的 subagent 工具。
 //   拦截式：await 审核结果，命中违规即返 { block: true, reason }，subagent 不召唤，
 //   reason 作为错误结果返给主 agent；不命中则放行。审核结果一律追加 ~/.pi/agent/jev-comp/audit.jsonl。
@@ -15,7 +15,7 @@ import { Type } from "typebox";
 import { appendFileSync } from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
-import { ask, listModels, JevError } from "../jev/client.ts";
+import { ask, JevError } from "../jev/client.ts";
 import { checkDispatch, formatWarnNotice, loadRuleSets, resolveMode } from "../jev/compliance.ts";
 import {
   createBuiltinAsk,
@@ -137,34 +137,6 @@ export default function (pi: ExtensionAPI) {
             .join("；");
           return {
             content: [{ type: "text", text: `JevError ${err.kind}: ${err.message}${extra ? `（${extra}）` : ""}` }],
-            details: {},
-          };
-        }
-        return {
-          content: [{ type: "text", text: `JevError unexpected: ${String(err)}` }],
-          details: {},
-        };
-      }
-    },
-  });
-
-  pi.registerTool({
-    name: "jev_models",
-    label: "Jev Models",
-    description: "列出 JEV 端点已连接的模型。",
-    parameters: Type.Object({}),
-    async execute() {
-      try {
-        const result = await listModels();
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          details: {},
-        };
-      } catch (err) {
-        if (err instanceof JevError) {
-          const extra = err.bodySummary ? `（body: ${err.bodySummary}）` : "";
-          return {
-            content: [{ type: "text", text: `JevError ${err.kind}: ${err.message}${extra}` }],
             details: {},
           };
         }

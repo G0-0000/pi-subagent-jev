@@ -3,7 +3,7 @@
 本文记录将 JEV 求值后端指向本地 laya 兼容端点（System One 形状）之实测结论，供评估 `JEV_AI_BASE_URL` 切换时参考。**核心结论：laya 可用于连通性验证与低时延粗筛，不可替代生产判定后端。**
 
 ## 端点形状
-- `GET /v1/models` 返回 `{models:[{name,description,release_date}]}`（非 OpenAI 之 `{data:[...]}`）；`listModels()` 原样透传，不影响使用。
+- `GET /v1/models` 返回 `{models:[{name,description,release_date}]}`（非 OpenAI 之 `{data:[...]}`）。
 - `POST /v1/systemone` 请求体与 JEV 兼容；除 `noul` 外每问另含 `confidence`、`action.act_probability`，顶层另含 `model`/`family`/`route`，`usage.output_tokens` 恒为 0。`checkDispatch` 唯取 `answers[id].noul`（有限数校验如故），多余字段无碍。
 - 模型别名：`auto`/`laya`/`jev-latest`（english 族，约 421M ModernBERT-large）、`laya-multilingual`（multilingual 族 mmBERT）。
 - 本地端无需鉴权；切换方式即改 `JEV_AI_BASE_URL`（必要时连同 `oc/jev-1.13-free` 类的 model id 改为 `auto` 等别名，`/reload` 生效）。

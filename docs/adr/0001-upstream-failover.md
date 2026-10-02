@@ -11,7 +11,7 @@
 
 ## 决策
 
-1. **链路落传输层**（`jev/client.ts`），不落拦截层——`ask()` 携可选 `failover` 配置按序迭代上游；`listModels()`、`scripts/calibrate.ts`（显式传 baseUrl/apiKey 或不带 failover）一律不受链路影响，量具读数不得混入他端点。
+1. **链路落传输层**（`jev/client.ts`），不落拦截层——`ask()` 携可选 `failover` 配置按序迭代上游；`scripts/calibrate.ts`（显式传 baseUrl/apiKey 或不带 failover）一律不受链路影响，量具读数不得混入他端点。
 2. **切换分类**（`jev/failover.ts` 之 `classifyFailure`，唯一权威）：network/timeout/5xx/429/401/403/404/200 不可用响应体 → 按序切下一级；402/其余 4xx 含 422/3xx/not_configured → 立即抛、下一级零请求。
 3. **红线二修订**：由「POST 不自动重试」精化为「同一 upstream 之同一 POST 绝不重发、不退避；切换按序每级一发；Retry-After 仅解析入 audit 不睡眠；全链败则 fail-open」。无重试之精神不变——变化仅在失败后允许**换端点**再试一发。
 4. **单一阈值集**：两端点判定高度一致（mean|Δ| 0.006），不引入 per-upstream 阈值，沿用同一生效规则表。
