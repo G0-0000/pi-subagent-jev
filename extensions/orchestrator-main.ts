@@ -13,8 +13,12 @@
  * （fail-open，与 jev 铁律同宗）。personaFile 所指档不存在时，唯注入一步
  * 静默跳过，裁剪与豁免照启。
  *
- * 主/子判别与 pi-subagents 上游同构：唯一原语 PI_SUBAGENT_CHILD === "1"
- *（pi-subagents 包根 index.ts 亦以此为准）。子 agent 进程一钩不注。
+ * 主/子判别双原语：① PI_SUBAGENT_CHILD === "1"（pi-subagents 包根 index.ts
+ * 亦以此为准）——异步 subagent-runner 子进程模块顶层设置；② 子会话档径之形
+ *（isChildSessionFile）——前台/后台 fresh 子会话档恒为
+ * <...>/<runId>/run-<N>/session.jsonl，fork 子会话档恒为
+ * <...>/<父档基名>/forks/<名>.jsonl；主会话档为扁平 <...>.jsonl，两形皆不中。
+ * 后台子进程一钩不注（模块顶层即返）；前台/fork 同进程子会话经档径判别于各钩内跳过。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -108,10 +112,21 @@ interface CachedBody {
 
 let cache: CachedBody | null = null;
 
-// 主/子判别：与 pi-subagents 上游同构，唯一原语即 PI_SUBAGENT_CHILD。
-// 该变量仅由 subagent-runner 子进程模块顶层设置，主进程永不置 1。
+// 主/子判别原语之一：PI_SUBAGENT_CHILD 环境变量——仅异步 subagent-runner
+// 子进程模块顶层设置，主进程永不置 1。前台（同进程）子会话该变量不见，
+// 须经 isChildSessionFile 以档径判别补之。
 function isSubagentChild(): boolean {
   return process.env.PI_SUBAGENT_CHILD === "1";
+}
+
+// 子会话档径判别：pi-subagents 前台/后台 fresh 子会话之档恒为
+// <...>/<runId>/run-<N>/session.jsonl；fork 子会话之档恒为
+// <...>/<父档基名>/forks/<名>.jsonl。主会话档为扁平 <...>.jsonl，
+// 两形皆不中。误中（主会话档恰合形）方向 fail-safe——扩展仅不启用。
+function isChildSessionFile(sessionFile: string | null | undefined): boolean {
+  if (!sessionFile) return false;
+  return /[\\/][^/\\]+[\\/]run-\d+[\\/]session\.jsonl$/.test(sessionFile)
+      || /[\\/]forks[\\/][^/\\]+\.jsonl$/.test(sessionFile);
 }
 
 // capability-ceiling 模块之型（自立接口，不赖类型解析，免触模块根隔离）
@@ -191,7 +206,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    if (isSubagentChild()) return; // 纵深防御
+    if (isSubagentChild() || isChildSessionFile(ctx.sessionManager.getSessionFile())) return; // 纵深防御
 
     // ① 注册子 agent 豁免（纯内存注册表，与请求前缀无涉）。
     //    惰性 import：pi-subagents 失联仅失豁免，不殃及注入与剪枝。
@@ -225,8 +240,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   // 每轮起始：幂等维持裁剪 + 注入 orchestrator 行为 prompt
-  pi.on("before_agent_start", async (event) => {
-    if (isSubagentChild()) return; // 纵深防御
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (isSubagentChild() || isChildSessionFile(ctx.sessionManager.getSessionFile())) return; // 纵深防御
 
     // 幂等剪枝：防止后续工具注册重新带回禁用项
     pruneActiveTools();
@@ -244,7 +259,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", (event, ctx) => {
-    if (isSubagentChild()) return; // 纵深防御
+    if (isSubagentChild() || isChildSessionFile(ctx.sessionManager.getSessionFile())) return; // 纵深防御
     if (config.blockedTools.has(event.toolName)) {
       if (ctx.hasUI) {
         ctx.ui.notify(`🔒 "${event.toolName}" blocked — use subagent`, "info");

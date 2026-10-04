@@ -71,7 +71,7 @@ The package also ships a second extension, `orchestrator-main`, which governs th
 }
 ```
 
-When enabled it does three things: injects the persona file's body (frontmatter stripped, wrapped in `<orchestrator_role>`) into the system prompt; trims and blocks the listed direct-execution tools for the main agent (the `subagent` tool is deliberately never blocked); and registers a capability-ceiling exemption so subagents run with full power. A missing `personaFile` skips only the injection step; a missing or malformed config file disables the whole extension silently (fail-open). Subagent child sessions (`PI_SUBAGENT_CHILD=1`) never get any of these hooks.
+When enabled it does three things: injects the persona file's body (frontmatter stripped, wrapped in `<orchestrator_role>`) into the system prompt; trims and blocks the listed direct-execution tools for the main agent (the `subagent` tool is deliberately never blocked); and registers a capability-ceiling exemption so subagents run with full power. A missing `personaFile` skips only the injection step; a missing or malformed config file disables the whole extension silently (fail-open). Subagent child sessions — identified by `PI_SUBAGENT_CHILD=1` (async runner processes) or by the child session-file shape `run-<N>/session.jsonl` / `forks/<name>.jsonl` (foreground/fork children running in the main process) — never get any of these hooks.
 
 > Note: the ceiling exemption resolves `pi-subagents` from the host pi installation (`~/.pi/agent/npm`) via a fallback chain — packages load with separate module roots, and the ceiling registry lives in the host's own pi-subagents instance, so bundling the dependency inside this package would register into the wrong instance.
 
@@ -181,7 +181,7 @@ JEV_AI_MODEL=可选之模型覆盖
 }
 ```
 
-启用后行三事：注入 persona 档正文（剥 frontmatter，以 `<orchestrator_role>` 包裹）于系统提示；按清单裁剪并拦截主 agent 之直执行工具（独不拦 `subagent`）；注册子 agent 豁免（capability-ceiling），使子 agent 得全量能力。`personaFile` 所指档不存在时，唯注入一步静默跳过；配置档缺失或损坏则本扩展静默全不启用（fail-open）。子 agent 进程（`PI_SUBAGENT_CHILD=1`）一钩不注。
+启用后行三事：注入 persona 档正文（剥 frontmatter，以 `<orchestrator_role>` 包裹）于系统提示；按清单裁剪并拦截主 agent 之直执行工具（独不拦 `subagent`）；注册子 agent 豁免（capability-ceiling），使子 agent 得全量能力。`personaFile` 所指档不存在时，唯注入一步静默跳过；配置档缺失或损坏则本扩展静默全不启用（fail-open）。子 agent——异步子进程以 `PI_SUBAGENT_CHILD=1` 判别，同进程之前台/fork 子会话以档径 `run-<N>/session.jsonl` 或 `forks/<名>.jsonl` 判别——一钩不注。
 
 > 注：ceiling 豁免经 fallback 链自宿主 pi 安装处（`~/.pi/agent/npm`）解析 `pi-subagents`——包之模块根各自隔离，而注册表存于宿主实例；若将依赖打入本包，徒注册于自家实例，宿主读不到。
 
