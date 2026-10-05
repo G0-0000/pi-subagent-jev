@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   askTrainingLine,
   dispatchTrainingLine,
+  monitorTrainingLine,
   trainingPath,
   writeTrainingLine,
 } from "./traininglog.ts";
@@ -90,4 +91,37 @@ test("⑤ trainingPath：默认落 ~/.pi/agent/jev-comp/training.jsonl（与 aud
   assert.ok(
     trainingPath().endsWith(path.join(".pi", "agent", "jev-comp", "training.jsonl"))
   );
+});
+
+test("⑥ monitorTrainingLine：source=monitor、signal/state/questions/probs/verdict 齐备、ts 有值", () => {
+  const questions = [
+    { id: "M001", instructions: "stall?", criteria: { true: "t", false: "f" } },
+    { id: "M004", instructions: "progress?" },
+  ];
+  const line = monitorTrainingLine({
+    agent: "worker",
+    signal: "timeline",
+    state: "The following is a runtime monitoring snapshot…",
+    questions,
+    probs: { M001: 0.2, M004: 0.9 },
+    verdict: "alert",
+  });
+  assert.equal(line.source, "monitor");
+  assert.equal(line.agent, "worker");
+  assert.equal(line.signal, "timeline");
+  assert.equal(line.state, "The following is a runtime monitoring snapshot…");
+  assert.deepEqual(line.questions, questions);
+  assert.deepEqual(line.probs, { M001: 0.2, M004: 0.9 });
+  assert.equal(line.verdict, "alert");
+  assert.ok(line.ts.length > 0);
+  // 三元 verdict 收窄：alert/ok/unknown 皆合法，越界类型编译期即拒
+  const okLine = monitorTrainingLine({
+    agent: "worker",
+    signal: "candidate",
+    state: "s",
+    questions: [],
+    probs: {},
+    verdict: "ok",
+  });
+  assert.equal(okLine.verdict, "ok");
 });
