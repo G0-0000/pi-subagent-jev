@@ -21,6 +21,8 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 
 （可选：多上游 failover 档 `~/.pi/agent/jev-comp/upstreams.json` 聚多枚 key，宜用户手书，本 skill 不代写。样例见 `examples/upstreams.sample.json`，详见 README「多上游 failover」节。）
 
+（可选：运行监控档 `~/.pi/agent/jev-comp/monitor.json`（v0.12.0）——观察运行中子 agent 之疑似 bash 停滞／无效工具循环／无变化重复失败，命中唯向主会话注提醒、绝不处置。默认关闭：用户明言要开监控方代写此档（`enabled: true` 起，余键可省、逐字段回退缺省），样例见 `examples/monitor.sample.json`；监控问句 M001–M004 为内建常量，**不入** compliance-rules.json。详见 README「运行监控」节。）
+
 ## 二、配置文件格式说明
 
 规则档唯一来源：`~/.pi/agent/jev-comp/compliance-rules.json`——代码零内建规则，档缺/坏即零检查全放行。骨架速查：
@@ -52,6 +54,6 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - **fail-open**：端点不可达、key 缺失、规则档损坏，派单一律放行；非法问句条目、非字符串/悬空/重复编号、非法 mode 值皆静默忽略——**配置笔误不报错，唯表现为「不拦」**，改档后宜以测试任务一验。
 - **改档须 `/reload`**：规则档、env 档、upstreams.json 皆扩展加载时读一次，改后不 reload 不生效。
 - **warn 模式之慎**：`mode: "warn"` 命中不拦，唯追加警告于工具结果之末；写权 agent 之阻塞派单活已干完，警告属事后复核——观察期外宜回 `block`。
-- **trainingLog**：`_global.trainingLog: true` 时测试求值亦记入 `training.jsonl`，测试毕宜跑 `scripts/prune-training.ts` 剔除测试行（详见 calibration.md）。
+- **trainingLog**：`_global.trainingLog: true` 时测试求值亦记入 `training.jsonl`，测试毕宜跑 `scripts/prune-training.ts` 剔除测试行（详见 calibration.md）。训练行 `source` 有三：`dispatch`（派单求值）／`ask`（jev_ask）／`monitor`（运行监控，启用时）。
 - **拦截文案**：首尾（「派单审核未通过…」/「请修正任务描述后重派。」）硬编码于扩展，唯各条 `message` 可配。
 - **编号之约**：Q 冠 agent 专属、G 冠全局，只增不退；删问句须并删各组引用，悬空编号虽静默忽略，亦当清之。

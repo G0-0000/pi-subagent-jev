@@ -25,6 +25,18 @@ export type DispatchTrainingLine = {
   blocked?: string[];
 };
 
+/** 运行监控路径之训练行（source="monitor"）：state 为 buildMonitorState 全量，signal 为触发之检测器信号。 */
+export type MonitorTrainingLine = {
+  ts: string;
+  source: "monitor";
+  agent: string;
+  signal: string;
+  state: string;
+  questions: TrainingQuestion[];
+  probs: Record<string, number>;
+  verdict: "alert" | "ok" | "unknown";
+};
+
 /** jev_ask 工具路径之训练行（source="ask"）。questions/answers 逐字留存请求与返回。 */
 export type AskTrainingLine = {
   ts: string;
@@ -35,7 +47,7 @@ export type AskTrainingLine = {
   answers: Record<string, unknown>;
 };
 
-export type TrainingLine = DispatchTrainingLine | AskTrainingLine;
+export type TrainingLine = DispatchTrainingLine | AskTrainingLine | MonitorTrainingLine;
 
 /** 训练档默认路径（运行时数据，与 audit.jsonl 同族，绝不入库）。 */
 export function trainingPath(): string {
@@ -63,6 +75,28 @@ export function dispatchTrainingLine(fields: {
   };
   if (fields.blocked && fields.blocked.length > 0) line.blocked = fields.blocked;
   return line;
+}
+
+/** 运行监控训练行构造（不含换行符）。 */
+export function monitorTrainingLine(fields: {
+  ts?: string;
+  agent: string;
+  signal: string;
+  state: string;
+  questions: TrainingQuestion[];
+  probs: Record<string, number>;
+  verdict: "alert" | "ok" | "unknown";
+}): MonitorTrainingLine {
+  return {
+    ts: fields.ts ?? new Date().toISOString(),
+    source: "monitor",
+    agent: fields.agent,
+    signal: fields.signal,
+    state: fields.state,
+    questions: fields.questions,
+    probs: fields.probs,
+    verdict: fields.verdict,
+  };
 }
 
 /** jev_ask 训练行构造（不含换行符）。model 缺省记 null。 */

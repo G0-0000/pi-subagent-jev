@@ -9,6 +9,7 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) package that gates sub
 - **Dispatch compliance gate** — when the main agent dispatches a subagent, the task text is sent to the JEV System One endpoint for evaluation. If any configured rule fires, the dispatch is blocked: every violation message is returned to the main agent as an error result, and the subagent is never spawned.
 - **`jev_ask` tool** — query the decision model directly. `jev_ask` evaluates a batch of typed questions (`noul` / `choice` / `score`) against a state text.
 - **Bundled `subagent-jev` skill** — walks you through recording endpoint/model settings and per-subagent compliance rules.
+- **Runtime monitoring (opt-in)** — watches running subagents for suspected bash stalls, unproductive tool loops, and repeated failures, and nudges the main agent with advisory alerts. Never interrupts; off by default.
 
 ## Requirements
 
@@ -49,7 +50,7 @@ Every evaluation — allowed or blocked — is appended to `~/.pi/agent/jev-comp
 
 Every audit line carries the constant fields `ts`, `agent`, `task_excerpt` (task truncated to 200 characters), `model`, `rules` and `verdict`, plus `latency_ms`. Conditionally: `blocked` (array of violating rule ids — present when rules fired, in either mode), `error` (fail-open error description), `probs` (rule id → raw probability, only when `_global.auditProbabilities` is `true`), `action` (`"warn"` — present only on warn-mode violations), and `upstream` + `failover` (whenever the request was anything other than a plain first-upstream success — a real switch, a cooldown skip, or a fallback to the first upstream; `failover` records carry `status` / `kind` / `ms` for failed attempts and `retryAfterMs` when a 429 reported `Retry-After`, while skipped levels are recorded as `{name, kind: "cooldown"}` with no `status`/`ms`, and a fallback attempt is marked `fallback: true`). A successful fallback carries `upstream` + `fallback: true` and no `failover` array. Rows where the whole chain failed carry the `failover` attempts alongside `error`, without `upstream`. Rows with neither a switch nor a fallback carry none of these keys. API keys are never logged.
 
-A second reserved switch, `_global.trainingLog` (default `false`), records training triples for local decision-model fine-tuning: when `true`, every dispatch evaluation and every `jev_ask` call also appends one line to `~/.pi/agent/jev-comp/training.jsonl` — the full `state`, the `questions` asked, and the probabilities/answers returned — with `source` set to `"dispatch"` or `"ask"` respectively. Best-effort and fail-open; runtime data, never committed.
+A second reserved switch, `_global.trainingLog` (default `false`), records training triples for local decision-model fine-tuning: when `true`, every dispatch evaluation and every `jev_ask` call also appends one line to `~/.pi/agent/jev-comp/training.jsonl` — the full `state`, the `questions` asked, and the probabilities/answers returned — with `source` set to `"dispatch"`, `"ask"`, or `"monitor"` (runtime-monitoring evaluations, when enabled) respectively. Best-effort and fail-open; runtime data, never committed.
 
 ### Tools
 
@@ -74,6 +75,26 @@ The package also ships a second extension, `orchestrator-main`, which governs th
 When enabled it does three things: injects the persona file's body (frontmatter stripped, wrapped in `<orchestrator_role>`) into the system prompt; trims and blocks the listed direct-execution tools for the main agent (the `subagent` tool is deliberately never blocked); and registers a capability-ceiling exemption so subagents run with full power. A missing `personaFile` skips only the injection step; a missing or malformed config file disables the whole extension silently (fail-open). Subagent child sessions — identified by `PI_SUBAGENT_CHILD=1` (async runner processes) or by the child session-file shape `run-<N>/session.jsonl` / `forks/<name>.jsonl` (foreground/fork children running in the main process) — never get any of these hooks.
 
 > Note: the ceiling exemption resolves `pi-subagents` from the host pi installation (`~/.pi/agent/npm`) via a fallback chain — packages load with separate module roots, and the ceiling registry lives in the host's own pi-subagents instance, so bundling the dependency inside this package would register into the wrong instance.
+
+### Runtime monitoring (opt-in, v0.12.0)
+
+The dispatch gate judges a task **before** dispatch; runtime monitoring watches the subagent **while it runs**. It is **disabled by default** and activates only when `~/.pi/agent/jev-comp/monitor.json` exists, parses, and sets `"enabled": true` (schema sample: [examples/monitor.sample.json](examples/monitor.sample.json); a malformed file disables the feature silently). All keys are optional and fall back individually:
+
+```json
+{
+  "enabled": true,
+  "bashFirstCheckMs": 300000,
+  "bashRecheckMs": 600000,
+  "sweepIntervalMs": 600000,
+  "maxCallsPerEval": 6,
+  "maxCharsPerCall": 800,
+  "maxStateChars": 8000
+}
+```
+
+Three detectors plus a fallback sweep: **bash stall** (a bash call still running past `bashFirstCheckMs` of total elapsed time; if judged reasonable it is re-asked every `bashRecheckMs` until it ends), **unproductive tool loop**, **repeated failure without changed conditions** (event-line candidates, deduped per signal and window), and a **no-progress sweep** for any run that has had no check for `sweepIntervalMs`. Triggers firing in the same tick merge into one evaluation per run. Four built-in questions (M001–M004, with answer-branch criteria; thresholds 0.6/0.7/0.7/0.6) are evaluated through the same `ask()` transport — including the failover chain, one request per upstream, fail-open on total failure — they are **not** part of `compliance-rules.json`.
+
+On a hit, an advisory alert is injected into the main session (`pi.sendMessage(..., { triggerTurn: true })`): agent name, the detector that fired, an evidence excerpt, the confidence, and a suggestion to check — **it never interrupts, stops, or steers the child**; the main agent decides. Evidence comes only from public pi-subagents surfaces (the `subagent:control-event` bus and the in-process status RPC); private transcript files are never read, and pi-subagents and agent profiles are never modified. Insufficient evidence yields `unknown` — no alert. With `_global.trainingLog` on, monitor evaluations also append `source: "monitor"` lines to `training.jsonl`. Note: for async (background) children the tool-call evidence is weaker (text tail only), so loop/failure detection is best-effort there. See [docs/adr/0005-runtime-monitoring.md](docs/adr/0005-runtime-monitoring.md) for the design decision.
 
 ## Multi-upstream failover (optional)
 
@@ -119,6 +140,7 @@ pi-subagent-jev 是一个 [pi](https://github.com/earendil-works/pi-coding-agent
 - **派单合规拦截**——主 agent 派发 subagent 时，任务文本送 JEV System One 端点求值。命中任一已配规则即拦截：违规原因逐条列出，作为错误结果返给主 agent，subagent 不被派生。
 - **`jev_ask` 工具**——直查决策模型。`jev_ask` 对 state 文本求值一批类型化问题（`noul` / `choice` / `score`）。
 - **附赠 `subagent-jev` skill**——引导录入端点/模型设置与各 subagent 之合规规则。
+- **运行监控（opt-in）**——观察运行中 subagent 之疑似 bash 停滞、无效工具循环与无变化重复失败，命中则向主 agent 注提醒。绝不打断；默认关闭。
 
 ### 环境要求
 
@@ -159,7 +181,7 @@ JEV_AI_MODEL=可选之模型覆盖
 
 审计行恒有字段 `ts`、`agent`、`task_excerpt`（任务原文按码点截 ≤200 字）、`model`、`rules` 与 `verdict`，另有 `latency_ms`。条件性字段：`blocked`（命中规则之 id 数组——block/warn 两种模式下规则命中即出现）、`error`（fail-open 之错误说明）、`probs`（规则 id → 原始概率，唯 `_global.auditProbabilities` 为 `true` 时附）、`action`（`"warn"`，唯 warn 模式命中时附）、以及 `upstream` ＋ `failover`（凡非「首配 upstream 一举即成」者皆附——真实切换、冷却跳过或保底真发首位皆是；`failover` 记录对真实失败尝试携 `status` / `kind` / `ms`，429 上报 `Retry-After` 时另携 `retryAfterMs`，被跳过之级则记 `{name, kind: "cooldown"}`、无 `status`/`ms`，保底真发之尝试另携 `fallback: true`）。保底成功之行携 `upstream` ＋ `fallback: true`，而无 `failover` 数组。全链败尽之行携 `failover` 历次尝试与 `error`，无 `upstream`。既未切换又非保底之行，诸键皆无。API key 绝不入日志。
 
-另一保留开关 `_global.trainingLog`（缺省 `false`）为本地决策模型微调记录训练三元组：为 `true` 时，每次派单求值与每次 `jev_ask` 调用皆另追加一行于 `~/.pi/agent/jev-comp/training.jsonl`——全量 `state`、所求 `questions` 与返回之概率/答案——`source` 分别为 `"dispatch"` 与 `"ask"`。尽力而为、fail-open；运行时数据，绝不入库。
+另一保留开关 `_global.trainingLog`（缺省 `false`）为本地决策模型微调记录训练三元组：为 `true` 时，每次派单求值与每次 `jev_ask` 调用皆另追加一行于 `~/.pi/agent/jev-comp/training.jsonl`——全量 `state`、所求 `questions` 与返回之概率/答案——`source` 分别为 `"dispatch"`、`"ask"` 与 `"monitor"`（运行监控求值，启用时）。尽力而为、fail-open；运行时数据，绝不入库。
 
 #### 工具
 
@@ -184,6 +206,26 @@ JEV_AI_MODEL=可选之模型覆盖
 启用后行三事：注入 persona 档正文（剥 frontmatter，以 `<orchestrator_role>` 包裹）于系统提示；按清单裁剪并拦截主 agent 之直执行工具（独不拦 `subagent`）；注册子 agent 豁免（capability-ceiling），使子 agent 得全量能力。`personaFile` 所指档不存在时，唯注入一步静默跳过；配置档缺失或损坏则本扩展静默全不启用（fail-open）。子 agent——异步子进程以 `PI_SUBAGENT_CHILD=1` 判别，同进程之前台/fork 子会话以档径 `run-<N>/session.jsonl` 或 `forks/<名>.jsonl` 判别——一钩不注。
 
 > 注：ceiling 豁免经 fallback 链自宿主 pi 安装处（`~/.pi/agent/npm`）解析 `pi-subagents`——包之模块根各自隔离，而注册表存于宿主实例；若将依赖打入本包，徒注册于自家实例，宿主读不到。
+
+#### 运行监控（opt-in，v0.12.0）
+
+派单拦截所审者，派单**之前**；运行监控所察者，子 agent **运行途中**。**默认不开**——唯 `~/.pi/agent/jev-comp/monitor.json` 存在、可解析且 `"enabled": true` 方启用（schema 样例：[examples/monitor.sample.json](examples/monitor.sample.json)；坏档静默不启用）。诸键皆可选、逐字段回退缺省：
+
+```json
+{
+  "enabled": true,
+  "bashFirstCheckMs": 300000,
+  "bashRecheckMs": 600000,
+  "sweepIntervalMs": 600000,
+  "maxCallsPerEval": 6,
+  "maxCharsPerCall": 800,
+  "maxStateChars": 8000
+}
+```
+
+三检测器＋兜底巡检：**bash 停滞**（bash 调用总耗时逾 `bashFirstCheckMs` 首查；判为合理则每 `bashRecheckMs` 复询至其结束）、**无效工具循环**、**无变化重复失败**（事件线候选，按信号＋窗口去重），以及**无进展巡检**（最近未获任何检查满 `sweepIntervalMs` 之 run）。同一 tick 多项触发合并为每 run 一次求值。四枚内建问句（M001–M004，含答支判据；阈值 0.6/0.7/0.7/0.6）经同一 `ask()` 传输求值——failover 链、每级一发、全链败 fail-open——**不入** `compliance-rules.json`。
+
+命中则以 `pi.sendMessage(..., { triggerTurn: true })` 注入主会话：agent 名、触发之检测器、证据节录、置信度与核查建议——**绝不打断、不停、不转向**，主 agent 自决。证据唯取 pi-subagents 公开面（`subagent:control-event` 总线与进程内 status RPC）；不读私有 transcript 档、不改 pi-subagents 与 agent 配置。证据不足判 `unknown`——不告警。`_global.trainingLog` 开时，监控求值亦落 `source: "monitor"` 行于 `training.jsonl`。注意：异步（后台）子 agent 之工具级证据较弱（唯文本尾部），循环/失败检测在彼为尽力而为。设计决策见 [docs/adr/0005-runtime-monitoring.md](docs/adr/0005-runtime-monitoring.md)。
 
 ### 多上游 failover（可选）
 

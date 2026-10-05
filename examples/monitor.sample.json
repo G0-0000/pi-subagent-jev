@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "bashFirstCheckMs": 300000,
+  "bashRecheckMs": 600000,
+  "sweepIntervalMs": 600000,
+  "maxCallsPerEval": 6,
+  "maxCharsPerCall": 800,
+  "maxStateChars": 8000
+}
