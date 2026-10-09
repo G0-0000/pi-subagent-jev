@@ -1,12 +1,21 @@
 {
   "name": "pi-subagent-jev",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "type": "module",
   "description": "JEV System One compliance gate for pi subagent dispatches",
-  "keywords": ["pi-package", "pi-extension", "jev", "compliance", "subagent"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "jev",
+    "compliance",
+    "subagent"
+  ],
   "license": "MIT",
   "author": "G0-0000",
-  "repository": { "type": "git", "url": "git+https://github.com/G0-0000/pi-subagent-jev.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/G0-0000/pi-subagent-jev.git"
+  },
   "homepage": "https://github.com/G0-0000/pi-subagent-jev#readme",
   "bugs": "https://github.com/G0-0000/pi-subagent-jev/issues",
   "scripts": {
@@ -14,8 +23,13 @@
     "prune-training": "node scripts/prune-training.ts"
   },
   "pi": {
-    "extensions": ["./extensions/pi-subagent-jev.ts", "./extensions/orchestrator-main.ts"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./extensions/pi-subagent-jev.ts",
+      "./extensions/orchestrator-main.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
