@@ -33,6 +33,16 @@ import {
   type TrainingWriter,
 } from "./traininglog.ts";
 import { readFileSync } from "node:fs";
+import {
+  buildDepthQuestion,
+  depthVerdict,
+  DEPTH_QUESTION_ID,
+  isThinkingLevel,
+  parseThinkingDepthConfig,
+  type DepthAdjustment,
+  type ThinkingDepthConfig,
+  type ThinkingLevel,
+} from "./depth.ts";
 
 /** 规则 id：任意字符串（R1-R4 等仅为配置档惯用编号，代码不限制）。 */
 export type RuleId = string;
@@ -139,6 +149,7 @@ export type AuditLineFields = {
   fallback?: boolean;
   /** warn 观察模式标记——仅 warn 模式且确有违规之审计行落此键；block/放行/错误诸行永不落 */
   action?: "warn";
+  depth?: { anchor: ThinkingLevel; adjust: DepthAdjustment; answer: string | null; prob: number | null; applied: boolean };
 };
 
 export type AuditLine = {
@@ -156,6 +167,7 @@ export type AuditLine = {
   failover?: AttemptRecord[];
   fallback?: boolean;
   action?: "warn";
+  depth?: { anchor: ThinkingLevel; adjust: DepthAdjustment; answer: string | null; prob: number | null; applied: boolean };
 };
 
 /** 模式解析（纯函数）：组显式 mode 优先，其次全局 mode，皆无 → "block"。 */
@@ -182,6 +194,7 @@ export function auditLine(fields: AuditLineFields): AuditLine {
   if (fields.fallback) line.fallback = true;
   // action 仅在 warn 观察模式且确有违规时由调用方传入；block/放行/错误诸行永不落此键（形状向后兼容）
   if (fields.action === "warn") line.action = "warn";
+  if (fields.depth) line.depth = fields.depth;
   return line;
 }
 
@@ -211,6 +224,7 @@ export type LoadedRules = {
     /** 内建链路（transport==="builtin" 时由扩展壳经 findOfType 解析后注入 createBuiltinAsk）：
      *  非法项静默弃，空/缺省回 DEFAULT_BUILTIN_CHAIN（typesafe/jev-latest） */
     builtinChain: BuiltinChainEntry[];
+    thinkingDepth: ThinkingDepthConfig;
   };
 };
 
@@ -327,6 +341,9 @@ function parseRuleRefs(cfg: unknown, questions: Map<string, RuleConfig>): RuleCo
  * 同一 id 即同一问句，无冲突胜负语义；其 agentDesc 不读（恒不生效）。
  * 任何读取/解析错误、以及 `_all`/组/条目之非法形状 → 静默弃之（fail-open），绝不抛：
  * 档缺失/坏 JSON → agents 空且 all 为 null → 所有派单放行。
+ * 深度调整 standalone（与规则无耦合）：`_global.thinkingDepth` 之解析独立于规则解析路径——
+ * 档为合法 JSON 且 `_global.thinkingDepth.enabled` 为 true 时，纵然全部规则条目/组/`_questions`
+ * 尽数损坏（静默弃空），深度仍照常启用；唯档缺失/坏 JSON（无配置可言）方回退深度关闭。
  */
 export function loadRuleSets(path: string): LoadedRules {
   const fallback = (): LoadedRules => ({
@@ -338,6 +355,7 @@ export function loadRuleSets(path: string): LoadedRules {
       mode: "block",
       transport: "selfhost",
       builtinChain: [...DEFAULT_BUILTIN_CHAIN],
+      thinkingDepth: parseThinkingDepthConfig(undefined),
     },
   });
   let raw: Record<string, RawRuleSet>;
@@ -355,25 +373,43 @@ export function loadRuleSets(path: string): LoadedRules {
   const mode = parseMode(gObj?.mode);
   const transport: Transport = gObj?.transport === "builtin" ? "builtin" : "selfhost";
   const builtinChain = parseBuiltinChain(gObj?.builtinChain);
-  const questions = parseQuestions((raw as Record<string, unknown>)[QUESTIONS_KEY]);
-  const agents: Record<string, AgentRuleSet> = {};
-  for (const [agent, cfg] of Object.entries(raw)) {
-    if (agent === GLOBAL_KEY || agent === QUESTIONS_KEY || agent === ALL_KEY) continue;
-    if (!cfg || typeof cfg !== "object") continue;
-    agents[agent] = {
-      agentDesc: typeof (cfg as RawRuleSet).agentDesc === "string" ? (cfg as RawRuleSet).agentDesc as string : "",
-      rules: parseRuleRefs(cfg, questions),
-      ...(parseGroupMode((cfg as RawRuleSet).mode)
-        ? { mode: parseGroupMode((cfg as RawRuleSet).mode) }
-        : {}),
-    };
+  // 深度调整 standalone：thinkingDepth 独立于规则解析自 `_global` 单取，其自身亦单独 try/catch——
+  // 规则条目/组/_questions 之解析无论出何岔子，皆不得连带关停深度（此项与规则无耦合）。
+  let thinkingDepth: ThinkingDepthConfig;
+  try {
+    thinkingDepth = parseThinkingDepthConfig(gObj?.thinkingDepth);
+  } catch {
+    thinkingDepth = parseThinkingDepthConfig(undefined);
   }
-  // `_all` 全局规则组：值非法（字符串/数组等）→ parseRuleRefs 返空 → 视为无（null）
-  const allRules = parseRuleRefs((raw as Record<string, unknown>)[ALL_KEY], questions);
+  // 规则解析（问句库/agent 组/`_all`）自成一段：任何意外异常只使规则为空，不牵连 `_global`
+  // 诸项（含 thinkingDepth）——规则缺位/损坏与深度启用可并存（fail-open）。
+  let agents: Record<string, AgentRuleSet>;
+  let allRules: RuleConfig[];
+  try {
+    const questions = parseQuestions((raw as Record<string, unknown>)[QUESTIONS_KEY]);
+    const parsedAgents: Record<string, AgentRuleSet> = {};
+    for (const [agent, cfg] of Object.entries(raw)) {
+      if (agent === GLOBAL_KEY || agent === QUESTIONS_KEY || agent === ALL_KEY) continue;
+      if (!cfg || typeof cfg !== "object") continue;
+      parsedAgents[agent] = {
+        agentDesc: typeof (cfg as RawRuleSet).agentDesc === "string" ? (cfg as RawRuleSet).agentDesc as string : "",
+        rules: parseRuleRefs(cfg, questions),
+        ...(parseGroupMode((cfg as RawRuleSet).mode)
+          ? { mode: parseGroupMode((cfg as RawRuleSet).mode) }
+          : {}),
+      };
+    }
+    agents = parsedAgents;
+    // `_all` 全局规则组：值非法（字符串/数组等）→ parseRuleRefs 返空 → 视为无（null）
+    allRules = parseRuleRefs((raw as Record<string, unknown>)[ALL_KEY], questions);
+  } catch {
+    agents = {};
+    allRules = [];
+  }
   return {
     agents,
     all: allRules.length > 0 ? { agentDesc: "", rules: allRules } : null,
-    global: { auditProbabilities, trainingLog, mode, transport, builtinChain },
+    global: { auditProbabilities, trainingLog, mode, transport, builtinChain, thinkingDepth },
   };
 }
 
@@ -398,7 +434,13 @@ function getTracker(): CooldownTracker {
   return trackerCache;
 }
 
-export type CheckResult = { line: AuditLine; violations: string[] };
+export type CheckResult = {
+  line: AuditLine;
+  violations: string[];
+  depthAdjust?: DepthAdjustment;
+  depthAnswer?: string | null;
+  depthProb?: number | null;
+};
 
 /**
  * warn 观察模式提示文本（纯函数，与 block reason 同族但明确非阻断）：
@@ -443,12 +485,18 @@ export async function checkDispatch(
     trainingLog?: boolean;
     /** 训练行写入器（缺省 writeTrainingLine 落 training.jsonl；测试可注入 mock） */
     writeTraining?: TrainingWriter;
+    /** 深度锚存在时将内建 D001 合并入同一请求。 */
+    depthAnchor?: ThinkingLevel;
+    depthThreshold?: number;
   } = {}
 ): Promise<CheckResult | null> {
   const ruleSets = opts.ruleSets ?? RULE_SETS;
   const rs = ruleSets[agent];
   const globalRules = opts.allRules?.rules ?? [];
-  if (!rs && globalRules.length === 0) return null;
+  const depthAnchor = opts.depthAnchor && opts.depthAnchor !== "off" && isThinkingLevel(opts.depthAnchor)
+    ? opts.depthAnchor
+    : undefined;
+  if (!rs && globalRules.length === 0 && !depthAnchor) return null;
   // 有效规则 = 全局规则（`_all` 序）＋ agent 组规则（组内序，同 id 已列全局者弃之）——
   // 问句自含后同一 id 即同一问句，去重以全局在前为准（与载入后同 id 引用同问句之序一致）
   const globalIds = new Set(globalRules.map((r) => r.id));
@@ -457,7 +505,7 @@ export async function checkDispatch(
   const rules = combined.filter(
     (r) => typeof r.instructions === "string" && r.instructions.trim() !== ""
   );
-  if (rules.length === 0) return null;
+  if (rules.length === 0 && !depthAnchor) return null;
   // agentDesc：有专属组取组内值；无专属组（仅 `_all` 生效）写死通用述语，无配置旋钮
   const agentDesc = rs ? rs.agentDesc : "a sub-agent";
   const askFn: AskFn =
@@ -471,22 +519,27 @@ export async function checkDispatch(
   const start = Date.now();
   const state = buildState(agent, agentDesc, task);
   // 训练记录之问句数组（与请求载荷同源；criteria 有则透传）
-  const trainingQuestions: TrainingQuestion[] = rules.map((r) => ({
-    id: r.id,
-    instructions: r.instructions,
-    ...(r.criteria ? { criteria: r.criteria } : {}),
-  }));
+  const depthQuestion = depthAnchor ? buildDepthQuestion(depthAnchor) : undefined;
+  const trainingQuestions: TrainingQuestion[] = [
+    ...rules.map((r) => ({
+      id: r.id,
+      instructions: r.instructions,
+      ...(r.criteria ? { criteria: r.criteria } : {}),
+    })),
+    ...(depthQuestion ? [{ id: DEPTH_QUESTION_ID, instructions: depthQuestion.instructions, criteria: depthQuestion.criteria }] : []),
+  ];
   try {
-    const questions = Object.fromEntries(
-      rules.map((r) => [
+    const questions = Object.fromEntries([
+      ...rules.map((r) => [
         r.id,
         {
           type: "noul" as const,
           instructions: r.instructions,
           ...(r.criteria ? { criteria: r.criteria } : {}),
         },
-      ])
-    );
+      ] as const),
+      ...(depthQuestion ? [[DEPTH_QUESTION_ID, depthQuestion] as const] : []),
+    ]);
     const res = await askFn({ state, questions });
     const answers = res.answers as Record<string, { noul?: unknown }>;
     // noul 缺失或非有限数：不进 probs → 审计标 unknown、不拦（fail-open，红线三）
@@ -496,6 +549,9 @@ export async function checkDispatch(
       if (typeof raw === "number" && Number.isFinite(raw)) probs[r.id] = raw;
     }
     const v = verdict(rules, probs);
+    const depthResult = depthQuestion
+      ? depthVerdict(answers[DEPTH_QUESTION_ID], opts.depthThreshold ?? 0.7)
+      : undefined;
     const meta = getAskMeta(res);
     // attempts 非空（真实切换或冷却跳过）或保底成功（meta.fallback，全链冷却下被迫真发首名）皆须落
     // upstream 键；首配 upstream 正常即成（attempts 空且非保底）不落键，与旧单端点链路无异。
@@ -542,6 +598,9 @@ export async function checkDispatch(
         probs: opts.auditProbabilities ? probs : undefined,
         // warn 观察模式：仅确有违规之行落 action 键；block 模式（含缺省）与放行/错误行永不落（形状不变）
         ...(opts.mode === "warn" && blocked.length > 0 ? { action: "warn" as const } : {}),
+        ...(depthAnchor && depthResult
+          ? { depth: { anchor: depthAnchor, ...depthResult, applied: false } }
+          : {}),
         ...(routed && meta
           ? {
               upstream: meta.upstream,
@@ -551,6 +610,11 @@ export async function checkDispatch(
           : {}),
       }),
       violations,
+      ...(depthResult ? {
+        depthAdjust: depthResult.adjust,
+        depthAnswer: depthResult.answer,
+        depthProb: depthResult.prob,
+      } : {}),
     };
   } catch (err) {
     const error =
@@ -569,9 +633,13 @@ export async function checkDispatch(
         verdict: "error",
         latencyMs: Date.now() - start,
         error,
+        ...(depthQuestion && depthAnchor ? {
+          depth: { anchor: depthAnchor, adjust: 0, answer: null, prob: null, applied: false },
+        } : {}),
         ...(failoverAttempts ? { failover: failoverAttempts } : {}),
       }),
       violations: [],
+      ...(depthQuestion ? { depthAdjust: 0 as const, depthAnswer: null, depthProb: null } : {}),
     };
   }
 }

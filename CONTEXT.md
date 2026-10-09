@@ -7,6 +7,8 @@
 - **问句自含（v0.8.0）** — `_questions` 每条 = 一问＋其判法（instructions/criteria/blockWhen/threshold/message 同居）；agent 组与 `_all` 的 `rules` 唯列问句编号，无内联规则形、无同问异阈。
 - **Warn 观察模式（v0.9.0）** — 模式 `"block"`（缺省，硬拦）／`"warn"`（命中不阻断，违规清单经 `tool_result` 钩追加于该次 subagent 工具结果之末：异步随启动回执、阻塞随最终输出；audit 行另加 `action:"warn"`）。`_global.mode` 为全局缺省，组级 `mode` 覆盖之（resolveMode：组＞全局＞block）。
 - **传输双路（v0.10.0）** — `_global.transport`：`"selfhost"`（缺省，自管 curl 链＋upstreams.json failover）／`"builtin"`（经 pi ≥0.99 内建 classifier 平台 `ctx.modelRegistry.classify` 求值，凭据 pi 代管、本仓零 key；链路改由 `_global.builtinChain` `{provider,model}` 数组定义，缺省 typesafe/jev-latest；每级恒 `maxRetries:0`，非法值静默回 selfhost）。
+- **思考深度锚（Anchor）** — preflight contract 解析得到的 agent thinking level；缺失时可用 `_global.thinkingDepth.defaultAnchor`，`off` 不参与调整。
+- **档梯（Rung Ladder）** — 深度映射 minimal/low → rung 1、medium → rung 2、high/xhigh → rung 3、max → rung 4；单次仅 ±1，边界钳制不变。
 
 ## 运行监控（术语）
 

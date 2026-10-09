@@ -1,5 +1,10 @@
 {
-  "_global": { "auditProbabilities": false, "trainingLog": false, "transport": "selfhost" },
+  "_global": {
+    "auditProbabilities": false,
+    "trainingLog": false,
+    "transport": "selfhost",
+    "thinkingDepth": { "enabled": false, "defaultAnchor": "high", "threshold": 0.7 }
+  },
   "_questions": {
     "G001": {
       "label": "任务目标明确（全局基线示例）",

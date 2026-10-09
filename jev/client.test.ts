@@ -225,18 +225,18 @@ test("⑧b 显式传空 apiKey → not_configured", withNoEnvKey(async () => {
   );
 }));
 
-test("⑨ choice 与 score 解析", async () => {
+test("⑨ choice 与 score 解析：selfhost 平铺线形归一为嵌套契约", async () => {
   const srv = await startServer((_req, _b, res) => {
     res.end(
       JSON.stringify({
         model: "jev-1.13.0",
+        // 真实 selfhost 线形：choice 为字符串＋顶层 confidence/probabilities（score 未变，仍按既有形状）。
         answers: {
           route: {
-            choice: {
-              value: "review",
-              probabilities: { pass: 0.2, review: 0.65, block: 0.15 },
-              confidence: 0.72,
-            },
+            type: "choice",
+            choice: "review",
+            probabilities: { pass: 0.2, review: 0.65, block: 0.15 },
+            confidence: 0.72,
           },
           severity: {
             score: {
@@ -260,10 +260,16 @@ test("⑨ choice 与 score 解析", async () => {
       baseUrl: srv.url,
       apiKey: "k",
     });
+    // choice：平铺 → 嵌套（回归锁：去掉归一即失败）
     const route = (r.answers.route as { choice: { value: string; probabilities: Record<string, number>; confidence: number } }).choice;
     assert.equal(route.value, "review");
     assert.equal(route.confidence, 0.72);
+    assert.deepEqual(route.probabilities, { pass: 0.2, review: 0.65, block: 0.15 });
     assert.ok(Math.abs(Object.values(route.probabilities).reduce((a, b) => a + b, 0) - 1) < 1e-9);
+    // 顶层平铺字段不得残留
+    assert.equal((r.answers.route as Record<string, unknown>).choice, route);
+    assert.ok(!("type" in (r.answers.route as Record<string, unknown>)));
+    // score：非 choice，原形保留（现状契约）
     const sev = (r.answers.severity as { score: { value: number; probabilities: Record<string, number>; confidence: number } }).score;
     assert.equal(sev.value, 2.4);
     assert.equal(sev.confidence, 0.58);

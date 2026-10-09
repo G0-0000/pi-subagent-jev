@@ -52,6 +52,16 @@ Every audit line carries the constant fields `ts`, `agent`, `task_excerpt` (task
 
 A second reserved switch, `_global.trainingLog` (default `false`), records training triples for local decision-model fine-tuning: when `true`, every dispatch evaluation and every `jev_ask` call also appends one line to `~/.pi/agent/jev-comp/training.jsonl` — the full `state`, the `questions` asked, and the probabilities/answers returned — with `source` set to `"dispatch"`, `"ask"`, or `"monitor"` (runtime-monitoring evaluations, when enabled) respectively. Best-effort and fail-open; runtime data, never committed.
 
+### Thinking-depth adjustment (opt-in)
+
+Set `_global.thinkingDepth` in `compliance-rules.json` to enable automatic one-rung adjustment when dispatching without an explicit `model`:
+
+```json
+"thinkingDepth": { "enabled": true, "defaultAnchor": "high", "threshold": 0.7 }
+```
+
+The extension resolves the subagent's configured thinking level through `pi-subagents/preflight`; `defaultAnchor` is used only if the contract has no level. `off` and unknown levels skip this feature. Built-in choice question D001 is added to the same JEV batch as any compliance questions (no extra request). The ladder is **minimal/low → medium → high/xhigh → max**. A confident `lower`/`higher` answer at or above `threshold` moves one rung; `same` leaves it unchanged. At either edge, adjustment is clamped (no change). A changed level is encoded as the model suffix (for example, `provider/model:max`). Explicit dispatch `model` arguments are untouched. When D001 was evaluated, the audit line includes `depth` with anchor, adjustment, answer, probability, and whether a rewrite was applied. Any preflight, JEV, or adjustment error fails open; the feature is off by default.
+
 ### Tools
 
 - `jev_ask` — parameters: `state` (the material text to evaluate), `questions` (a map of key → `{type, instructions}`), optional `model`. Both `state` and `questions` are optional and fall back to a built-in probe payload (a small typo-fix task plus one `noul` question), so passing only `upstream` suffices for a quick probe. Optional `upstream` (a NAME from `upstreams.json`) sends exactly one request straight to that named upstream — bypassing failover chain order, cooldown, and switching — for quick single-upstream testing (in builtin transport mode the parameter is accepted but ignored). The result carries an `ms` field with the elapsed milliseconds.
@@ -182,6 +192,12 @@ JEV_AI_MODEL=可选之模型覆盖
 审计行恒有字段 `ts`、`agent`、`task_excerpt`（任务原文按码点截 ≤200 字）、`model`、`rules` 与 `verdict`，另有 `latency_ms`。条件性字段：`blocked`（命中规则之 id 数组——block/warn 两种模式下规则命中即出现）、`error`（fail-open 之错误说明）、`probs`（规则 id → 原始概率，唯 `_global.auditProbabilities` 为 `true` 时附）、`action`（`"warn"`，唯 warn 模式命中时附）、以及 `upstream` ＋ `failover`（凡非「首配 upstream 一举即成」者皆附——真实切换、冷却跳过或保底真发首位皆是；`failover` 记录对真实失败尝试携 `status` / `kind` / `ms`，429 上报 `Retry-After` 时另携 `retryAfterMs`，被跳过之级则记 `{name, kind: "cooldown"}`、无 `status`/`ms`，保底真发之尝试另携 `fallback: true`）。保底成功之行携 `upstream` ＋ `fallback: true`，而无 `failover` 数组。全链败尽之行携 `failover` 历次尝试与 `error`，无 `upstream`。既未切换又非保底之行，诸键皆无。API key 绝不入日志。
 
 另一保留开关 `_global.trainingLog`（缺省 `false`）为本地决策模型微调记录训练三元组：为 `true` 时，每次派单求值与每次 `jev_ask` 调用皆另追加一行于 `~/.pi/agent/jev-comp/training.jsonl`——全量 `state`、所求 `questions` 与返回之概率/答案——`source` 分别为 `"dispatch"`、`"ask"` 与 `"monitor"`（运行监控求值，启用时）。尽力而为、fail-open；运行时数据，绝不入库。
+
+#### 思考深度调整（opt-in）
+
+于 `compliance-rules.json` 之 `_global` 增设 `"thinkingDepth": { "enabled": true, "defaultAnchor": "high", "threshold": 0.7 }`，即可为**未显式指定 `model`** 的派单启用自动调档；缺省关闭。扩展经 `pi-subagents/preflight` 解析 agent 配置之 thinking level；仅在 contract 无级别时用 `defaultAnchor`。锚为 `off` 或未知则跳过。内建 choice 问句 D001 与合规问句合并为**同一批 JEV 请求**，无额外往返。
+
+档梯为 **minimal/low → medium → high/xhigh → max**。D001 判为 `lower`/`higher` 且对应概率 `>= threshold` 时升/降一档；`same` 不变。两端钳制（无档可调即不变）；实际改动以模型后缀写入，如 `provider/model:max`。显式派单 `model` 不触碰。D001 已求值时，audit 行附 `depth`（锚、调整、答案、概率与是否已改写）。预检、JEV 或调整任一错误皆 fail-open，派单照常。
 
 #### 工具
 

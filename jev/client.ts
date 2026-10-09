@@ -407,6 +407,40 @@ function withAttempts(err: JevError, attempts: AttemptRecord[]): JevError {
   return err;
 }
 
+/** selfhost 线形归一：JEV `/v1/systemone` 之 choice 答案为平铺形
+ *  `{type:"choice", choice:"<值>", probabilities, confidence}`（choice 为字符串），
+ *  与我方嵌套契约 `{choice:{value,probabilities,confidence}}` 不符——depthVerdict 等消费方按后者读取。
+ *  逐条归一：choice 为字符串即包为嵌套形；他型（noul/score）与他形一概原样保留。
+ *  单条归一异常不抛、留原形（fail-open：绝不因一条坏答案废整批）。 */
+function normalizeAnswers(raw: unknown): Record<string, Answer> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw as Record<string, Answer>;
+  const src = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [id, entry] of Object.entries(src)) {
+    try {
+      const o = entry as Record<string, unknown> | null;
+      if (o && typeof o === "object" && !Array.isArray(o) && typeof o.choice === "string") {
+        out[id] = {
+          choice: {
+            value: o.choice,
+            probabilities:
+              o.probabilities && typeof o.probabilities === "object" && !Array.isArray(o.probabilities)
+                ? o.probabilities
+                : {},
+            confidence:
+              typeof o.confidence === "number" && Number.isFinite(o.confidence) ? o.confidence : 0,
+          },
+        };
+      } else {
+        out[id] = entry;
+      }
+    } catch {
+      out[id] = entry; // 单条归一失败：留原形（fail-open）
+    }
+  }
+  return out as Record<string, Answer>;
+}
+
 /** System One：对 state 求值一组类型化问题。不自动重试（同一 upstream 之 POST 绝不重发）；
  *  携 failover 链路时按序切换上游，每级一发。 */
 export async function ask(params: AskParams): Promise<SystemOneResult> {
@@ -445,6 +479,7 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
       throw new JevError("unexpected", "响应缺少 answers 字段");
     }
     res.ms = Math.max(0, Math.round(Date.now() - t0));
+    res.answers = normalizeAnswers(res.answers); // selfhost 平铺 choice → 嵌套契约（消费方之约）
     setAskMeta(res, { upstream: up.name, attempts: [] });
     return res;
   }
@@ -468,6 +503,7 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
       throw new JevError("unexpected", "响应缺少 answers 字段");
     }
     res.ms = Math.max(0, Math.round(Date.now() - t0));
+    res.answers = normalizeAnswers(res.answers); // selfhost 平铺 choice → 嵌套契约（消费方之约）
     return res;
   }
 
@@ -511,6 +547,7 @@ export async function ask(params: AskParams): Promise<SystemOneResult> {
       }
       tr.markSuccess(up.name);
       res.ms = Math.max(0, Math.round(Date.now() - t0));
+      res.answers = normalizeAnswers(res.answers); // selfhost 平铺 choice → 嵌套契约（消费方之约）
       setAskMeta(res, {
         upstream: up.name,
         attempts: [...attempts],

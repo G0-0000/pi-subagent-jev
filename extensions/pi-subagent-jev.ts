@@ -15,6 +15,8 @@ import { Type } from "typebox";
 import { appendFileSync } from "node:fs";
 import os from "node:os";
 import pathMod from "node:path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import { ask, JevError } from "../jev/client.ts";
 import { checkDispatch, formatWarnNotice, loadRuleSets, resolveMode } from "../jev/compliance.ts";
 import {
@@ -44,10 +46,25 @@ import {
 } from "../jev/monitor.ts";
 import { MonitorStore } from "../jev/monitor-store.ts";
 import { CooldownTracker, loadFailoverConfig } from "../jev/failover.ts";
+import { applyDepthAdjustment, isThinkingLevel, joinThinkingSuffix, levelToRung, type ThinkingLevel } from "../jev/depth.ts";
 
 const AUDIT_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "audit.jsonl");
 const RULES_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "compliance-rules.json");
 const MONITOR_PATH = pathMod.join(os.homedir(), ".pi", "agent", "jev-comp", "monitor.json");
+
+interface PreflightModule {
+  resolveSubagentLaunchContract(input: Record<string, unknown>): Promise<unknown>;
+}
+
+async function importPreflight(): Promise<PreflightModule> {
+  try {
+    return await import("pi-subagents/preflight") as PreflightModule;
+  } catch {
+    const hostRequire = createRequire(pathMod.join(os.homedir(), ".pi", "agent", "npm", "noop.js"));
+    const resolved = hostRequire.resolve("pi-subagents/preflight");
+    return await import(pathToFileURL(resolved).href) as PreflightModule;
+  }
+}
 
 // 运行监控（advisory，opt-in）：时长线轮询之 tick 间隔（恒小于配置诸阈值，30s 一拍）。
 const MONITOR_TICK_MS = 30_000;
@@ -199,8 +216,40 @@ export default function (pi: ExtensionAPI) {
     const agent = input.agent;
     const task = input.task;
     if (typeof agent !== "string" || typeof task !== "string") return;
-    // 无专属组之 agent 亦受查：配置档有 `_all` 全局规则时凡派单皆审（fail-open：无规则则放行）
-    if (!(agent in config.agents) && !(config.all && config.all.rules.length > 0)) return;
+    const hasComplianceRules = !!(config.agents[agent]?.rules.length || config.all?.rules.length);
+    const depthConfig = config.global.thinkingDepth;
+    let depthAnchor: ThinkingLevel | undefined;
+    let contractModel: string | undefined;
+    // 显式 model 参数优先，当前版本不调整；预检失败仅跳过深度功能，合规审核照常。
+    if (depthConfig.enabled && input.model === undefined) {
+      try {
+        const preflight = await importPreflight();
+        const preflightInput: Record<string, unknown> = { agent, task, cwd: ctx.cwd };
+        try {
+          const availableModels = ctx.modelRegistry.getAvailable();
+          if (availableModels) preflightInput.availableModels = availableModels;
+        } catch {
+          /* host model registry 不可用时按要求省略 */
+        }
+        const result = await preflight.resolveSubagentLaunchContract(preflightInput) as {
+          ok?: boolean;
+          contract?: { model?: unknown; thinking?: unknown };
+        };
+        const contractThinking = result?.contract?.thinking;
+        const level = contractThinking == null
+          ? depthConfig.defaultAnchor
+          : isThinkingLevel(contractThinking)
+            ? contractThinking
+            : undefined;
+        if (level && level !== "off" && levelToRung(level) !== null && result?.ok) {
+          depthAnchor = level;
+          if (typeof result.contract?.model === "string") contractModel = result.contract.model;
+        }
+      } catch {
+        /* fail-open：预检不可用时只跳过深度调整 */
+      }
+    }
+    if (!hasComplianceRules && !depthAnchor) return;
     try {
       // 处置模式：组级显式 ＞ 全局 ＞ block（纯函数归并，加载侧已保证值合法）
       const mode = resolveMode(agent, config);
@@ -211,9 +260,23 @@ export default function (pi: ExtensionAPI) {
         auditProbabilities: config.global.auditProbabilities,
         trainingLog: config.global.trainingLog,
         mode,
+        ...(depthAnchor ? { depthAnchor, depthThreshold: depthConfig.threshold } : {}),
       });
       if (!res) return;
+      let adjustedModel: string | undefined;
+      if (res.violations.length === 0 && res.depthAdjust && res.depthAdjust !== 0 && depthAnchor && contractModel) {
+        try {
+          const level = applyDepthAdjustment(depthAnchor, res.depthAdjust);
+          if (level !== depthAnchor) {
+            adjustedModel = joinThinkingSuffix(contractModel, level);
+            if (res.line.depth) res.line.depth.applied = true;
+          }
+        } catch {
+          /* fail-open：模型改写失败不影响派单 */
+        }
+      }
       appendFileSync(AUDIT_PATH, JSON.stringify(res.line) + "\n");
+      if (adjustedModel) input.model = adjustedModel;
       if (res.violations.length > 0) {
         // warn 观察模式：不拦、派单照常；违规提示暂存于 toolCallId，待 tool_result 追加（观察事后可循）。
         if (mode === "warn") {
