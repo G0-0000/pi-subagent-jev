@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+// CodeBuddy Code 钩子入口：argv[2] = pre | post | session。
+// 读 stdin JSON → cb/hook-main.ts 分派 → 至多一个 JSON 对象写 stdout → 恒 exit 0。
+// stdout 绝不夹带他物（警告上 stderr）；任何异常皆静默放行。
+import { emitOutput } from "../cb/host.ts";
+import { runHook } from "../cb/hook-main.ts";
+
+let out = {};
+try {
+  out = await runHook(process.argv);
+} catch {
+  out = {};
+}
+emitOutput(out && typeof out === "object" && !Array.isArray(out) ? out : {});
+process.exit(0);

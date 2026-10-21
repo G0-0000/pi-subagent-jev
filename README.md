@@ -2,7 +2,7 @@
 
 A [pi](https://github.com/earendil-works/pi-coding-agent) package that gates subagent dispatches through a JEV System One decision model, plus general-purpose tools to query that model.
 
-> **Currently only supports pi + pi-subagents** — the dispatch gate hooks the `subagent` tool provided by the pi-subagents package.
+> **Supports pi + pi-subagents and CodeBuddy Code** — on pi the gate hooks the `subagent` tool provided by the pi-subagents package; on CodeBuddy Code it runs as a plugin hook (see [CodeBuddy Code](#codebuddy-code)).
 
 ## Features
 
@@ -33,6 +33,16 @@ JEV_AI_MODEL=optional-model-override
 `JEV_AI_API_KEY` and `JEV_AI_BASE_URL` are required; `JEV_AI_MODEL` is optional (default `oc/jev-1.13-free`). Run `/reload` in pi (or restart) to pick it up.
 
 Rather not edit files by hand? Just ask pi to 配置 subagent 规则 — the bundled skill will guide you (see below).
+
+## CodeBuddy Code
+
+The same gate is available as a CodeBuddy Code plugin (manifest `.codebuddy-plugin/plugin.json`, hooks `hooks/hooks.json`, entry `bin/jev-hook`, adapter `cb/`):
+
+```
+codebuddy --plugin-dir /path/to/pi-subagent-jev
+```
+
+Dispatch tools `Task`/`Agent` are checked at `PreToolUse` (deny on violation); in `warn` mode the notice is delivered as `additionalContext` at `PostToolUse`. Rules and the upstream chain remain single-source at `~/.pi/agent/jev-comp` (override the directory with `JEV_CONFIG_DIR`). Selfhost transport only — no builtin classifier, thinking-depth adjustment, or runtime monitoring. Details: [docs/codebuddy.md](docs/codebuddy.md).
 
 ## Usage
 

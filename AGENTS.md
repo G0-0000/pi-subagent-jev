@@ -11,6 +11,8 @@ pi package（名 **pi-subagent-jev**），扩展二枚：**`extensions/pi-subage
 - **运行监控（opt-in，v0.12.0）** — 观察运行中子 agent 之疑似 bash 停滞／无效工具循环／无变化重复失败，命中仅向主会话注入提醒文本（`pi.sendMessage(triggerTurn)`），不打断／不停／不转向。默认关闭，`~/.pi/agent/jev-comp/monitor.json` 存在且 `enabled:true` 方启用，与派单审核彼此独立；详见下节与 `docs/adr/0005-runtime-monitoring.md`。
 - **思考深度调整（opt-in）** — 派单未显式指定 `model` 时，预检解析 agent 的 thinking 锚，以同一 JEV 批次之 D001 判定是否升/降一档；默认关闭，配置于 `_global.thinkingDepth`，任一错误 fail-open。
 
+本仓另含 CodeBuddy Code 插件适配：复用同一 jev/ 核心，宿主钩子面由 .codebuddy-plugin/plugin.json、hooks/hooks.json、bin/jev-hook、cb/ 承担；派单拦截走 PreToolUse（matcher ^(Task|Agent)$，block 输出 permissionDecision deny），warn 提示经 PostToolUse 以 additionalContext 追加。详见 docs/codebuddy.md。
+
 逻辑层在 `jev/`：
 - `jev/client.ts` — JEV API 传输层（零 npm 依赖，`spawn curl`；端点由 `JEV_AI_BASE_URL` 必配、无内建默认，路径 `/v1/systemone` 与 `/v1/models`；错误映射为 `JevError`；`ask()` 可携 failover 链路按序切换上游）
 - `jev/failover.ts` — 多上游 failover 纯逻辑层（`upstreams.json` 解析校验 `loadFailoverConfig`、失败分类 `classifyFailure`、进程内冷却表 `CooldownTracker`；零 IO 零 curl，可测）
@@ -28,6 +30,17 @@ pi-subagent-jev/
 ├── extensions/
 │   ├── pi-subagent-jev.ts     # 扩展一：jev_ask 工具 ＋ 派单拦截
 │   └── orchestrator-main.ts   # 扩展二（opt-in）：主会话 persona 注入＋直执行工具裁剪＋子 agent 豁免
+├── .codebuddy-plugin/
+│   └── plugin.json            # CodeBuddy 插件清单
+├── hooks/
+│   └── hooks.json             # CodeBuddy PreToolUse / PostToolUse 配置
+├── bin/
+│   └── jev-hook               # CodeBuddy 钩子入口（Node 直跑 .ts，恒 exit 0）
+├── cb/
+│   ├── hook-main.ts           # 适配主逻辑（pre / post 分派）
+│   ├── host.ts                # 钩子 IO、配置目录解析
+│   ├── warn-state.ts          # warn 暂存（文件态，TTL 3600s，容量 100）
+│   └── *.test.ts
 ├── jev/
 │   ├── client.ts              # API 传输层（curl、错误映射、key 解析、failover 链路）
 │   ├── client.test.ts
@@ -47,7 +60,8 @@ pi-subagent-jev/
 │   ├── monitor.test.ts
 │   └── monitor-store.test.ts
 ├── docs/
-│   └── adr/                     # 0001-upstream-failover.md、0002-global-rules-and-config-only.md、0003-self-contained-questions.md、0004-warn-advisory-mode.md、0005-runtime-monitoring.md
+│   ├── adr/                     # 0001-upstream-failover.md、0002-global-rules-and-config-only.md、0003-self-contained-questions.md、0004-warn-advisory-mode.md、0005-runtime-monitoring.md
+│   └── codebuddy.md
 ├── scripts/
 │   ├── calibrate.ts           # 阈值校准脚本（发真实请求，不进测试）
 │   └── calibration-20260925.jsonl
@@ -79,7 +93,7 @@ pi-subagent-jev/
 3. **任何错误 fail-open** — JEV 出错、配置档出错、概率缺失或 noul 字段缺失/非有限数皆放行（后者曾为漏洞，已修复：该规则标 `unknown` 不拦），绝不阻断派发、绝不外抛。`checkDispatch` 捕获一切异常返 `verdict:"error"` 行且 violations 为空
 
 ## 测试铁律
-- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts`，当前 188 条）**全绿方可提交**
+- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 209 条）**全绿方可提交**
 - 测试不发真实 JEV 端点请求：`client.test.ts` 起本地 127.0.0.1 随机端口 mock HTTP server、真发 curl；`failover.test.ts` 纯逻辑＋注入时钟；`compliance.test.ts` 注入 `askFn`；`monitor*.test.ts` 注入概率＋假时钟。`scripts/calibrate.ts` 是唯一发真实请求的脚本，不进测试
 
 ## 配置与运行时
@@ -95,6 +109,15 @@ pi-subagent-jev/
 - 配置档解析语义（`jev/compliance.ts` 之 `loadRuleSets`，返回 `{ agents, all, global }`）：**v0.7.0 起内建规则全废（`RULE_SETS` 为空），规则唯存配置档；v0.8.0 起组唯编号引用，旧 `{id, question, …}` 规形不再加载**；顶层保留键三——`_global`（全局开关）、`_questions`（自含问句库）、**`_all`（全局引用组）**，均不视作 agent 名。`_all` 之 `rules` 所列问句凡派单皆受查（含无专属组之 agent，其 state 述语写死 `"a sub-agent"`，`_all.agentDesc` 不读），与 agent 专属编号并集**去重**（全局在前，一次请求）；组内非字符串项、悬空编号、重复编号皆静默忽略。任何读取/解析错误静默回空默认（fail-open）
 - 二者皆**运行时数据，不入库**（仓库存样例与代码，不存实际配置与审计留痕）
 - **多上游 failover（可选）**：生效档 `~/.pi/agent/jev-comp/upstreams.json`（仓库内 `examples/upstreams.sample.json` 为样例；代码只读绝不写，运行时数据不入库）。档不存在或任何解析/校验错误 → 返 null，走旧单端点链路（fail-open）。扩展加载时读一次（`jev/compliance.ts` 模块级懒缓存，`/reload` 重导入即重置）。顶层 `timeoutMs`（缺省 5000，curl `--max-time` 按秒取整）与 `cooldownMs`（缺省 30000）须为正整数；`upstreams` 须非空数组，每项 `{name, baseUrl, apiKey, model, proxy?}`：name 非空且唯一、baseUrl/apiKey/model 非空、baseUrl 末尾斜杠剥除、proxy 可选（缺省走既有 `JEV_AI_PROXY` 链）。`ask()` 按序尝试：首级用显式 `model` 参数（若传）否则各 upstream 自身 model；显式传 `baseUrl`/`apiKey`（如校准脚本）绕开链路。切换分类与冷却语义见 `jev/failover.ts` 档头注释（链上只一 upstream 时，其入冷却即全链冷却、每次皆保底真发，故冷却仅余 audit 意义）；决策记录见 `docs/adr/0001-upstream-failover.md`
+
+## CodeBuddy 适配（v0.13.0）
+
+- 形态：插件根即仓库根；清单 .codebuddy-plugin/plugin.json，钩子 hooks/hooks.json，入口 bin/jev-hook（argv[2] = pre | post），适配逻辑 cb/。
+- 安装：codebuddy --plugin-dir ~/pi-subagent-jev；开发期可用 /reload-plugins 重载。
+- 配置：与 pi 侧同源，缺省 ~/.pi/agent/jev-comp（JEV_CONFIG_DIR 可覆写）；钩子为独立进程、每次触发重读，改档无须 /reload。
+- 语义：block 命中输出 hookSpecificOutput.permissionDecision="deny" 与同文 reason；warn 命中以 tool_use_id（缺则 call_id）落盘，PostToolUse 取回并附 additionalContext；审计行另有 host:"codebuddy"。
+- 限制：唯 selfhost 传输；无思考深度调整、无运行监控、无 jev_ask（后续经 MCP 补）；JEV_CONFIG_DIR 不覆写 env 档与 training.jsonl。
+- 红线照旧：任何错误 fail-open（返 {}、exit 0）；stdout 至多一个 JSON。
 
 ## 部署
 - 本机安装命令：`pi install ~/pi-subagent-jev`（local source，直指项目目录）；实际注册于 `~/.pi/agent/settings.json` 之 `packages` 项（登记为相对路径 `"../../pi-subagent-jev"`，`pi list` 可见）

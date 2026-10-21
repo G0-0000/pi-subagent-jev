@@ -1,0 +1,7 @@
+{
+  "name": "subagent-jev",
+  "version": "0.13.0",
+  "description": "JEV System One compliance gate for CodeBuddy Code subagent dispatches",
+  "author": "G0-0000",
+  "license": "MIT"
+}
