@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// CodeBuddy Code 钩子入口：argv[2] = pre | post | session。
+// 钩子入口（CodeBuddy Code 与 Claude Code 共用）：argv[2] = pre | post | session。
+// 宿主由插件根环境变量判别：CODEBUDDY_PLUGIN_ROOT 或 CLAUDE_PLUGIN_ROOT（见 cb/host.ts 之 detectHost）。
 // 读 stdin JSON → cb/hook-main.ts 分派 → 至多一个 JSON 对象写 stdout → 恒 exit 0。
 // stdout 绝不夹带他物（警告上 stderr）；任何异常皆静默放行。
 import { emitOutput } from "../cb/host.ts";

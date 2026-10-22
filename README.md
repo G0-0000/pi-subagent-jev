@@ -44,6 +44,18 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
 
 Dispatch tools `Task`/`Agent` are checked at `PreToolUse` (deny on violation); in `warn` mode the notice is delivered as `additionalContext` at `PostToolUse`. Rules and the upstream chain remain single-source at `~/.pi/agent/jev-comp` (override the directory with `JEV_CONFIG_DIR`). Selfhost transport only — no builtin classifier, thinking-depth adjustment, or runtime monitoring. Details: [docs/codebuddy.md](docs/codebuddy.md).
 
+## Claude Code
+
+The same gate runs as a Claude Code plugin, reusing the CodeBuddy Code adapter (manifest `.claude-plugin/plugin.json`, shared hooks `hooks/hooks.json`, entry `bin/jev-hook`, adapter `cb/`):
+
+```
+claude --plugin-dir /path/to/pi-subagent-jev
+```
+
+The canonical dispatch tool is `Agent` (v2.1.63); `Task` is kept as an alias, and the hook matcher accepts both.
+
+Rules and the upstream chain remain single-source at `~/.pi/agent/jev-comp` (override the directory with `JEV_CONFIG_DIR`). Selfhost transport only — no builtin classifier, thinking-depth adjustment, runtime monitoring, or `jev_ask`. **End-to-end validation on a real Claude Code CLI has not been performed** (no CLI available at implementation time); the adapter follows the documented hook protocol and is covered by unit tests only. Details: [docs/claude-code.md](docs/claude-code.md).
+
 ## Usage
 
 ### Dispatch gate

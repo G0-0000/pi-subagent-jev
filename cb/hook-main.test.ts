@@ -65,7 +65,8 @@ function readAudit(dir: string): Array<Record<string, unknown>> {
 
 test("① 放行：概率达标 → 空对象，审计落 pass 行含 host", async () => {
   const dir = makeConfig();
-  const out = await handlePre(preInput(), { configDir: dir, askFn: askWith(0.9) });
+  // 显式注入 host，免依赖宿主环境变量之有无
+  const out = await handlePre(preInput(), { configDir: dir, askFn: askWith(0.9), host: "codebuddy" });
   assert.deepEqual(out, {});
   const lines = readAudit(dir);
   assert.equal(lines.length, 1);

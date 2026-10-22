@@ -1,9 +1,9 @@
-// CodeBuddy Code 适配主逻辑：PreToolUse 派单审核、PostToolUse 交付 warn 提示。
+// 钩子适配主逻辑（CodeBuddy Code 与 Claude Code 共用）：PreToolUse 派单审核、PostToolUse 交付 warn 提示。
 // 复用 jev/compliance.ts 之 loadRuleSets / checkDispatch / resolveMode 与 formatWarnNotice 原样不改；
 // 求值走 jev/client.ts 之 ask()（自管 curl 链，多上游 failover 读 <configDir>/upstreams.json）。
 // 与 pi 侧共享 ~/.pi/agent/jev-comp（JEV_CONFIG_DIR 可覆写），规则故为单一来源。
 // 红线照旧：任何错误 fail-open（返 {}、绝不外抛）、不写 key/baseUrl 于任何输出、stdout 唯一个 JSON。
-// 本批不含 builtin 传输、思考深度调整与运行监控（见 docs/codebuddy.md 已知限制）。
+// 本批不含 builtin 传输、思考深度调整与运行监控（见 docs/codebuddy.md、docs/claude-code.md 已知限制）。
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { ask, type SystemOneResult } from "../jev/client.ts";
@@ -17,6 +17,7 @@ import {
 import { CooldownTracker, loadFailoverConfig } from "../jev/failover.ts";
 import {
   denyPre,
+  detectHost,
   parseHookInput,
   passOutput,
   pickCallId,
@@ -73,6 +74,8 @@ export type HookDeps = {
   stdin?: () => Promise<string>;
   /** 审计行写入器（缺省追加 <configDir>/audit.jsonl；测试可注入） */
   writeAudit?: (configDir: string, line: Record<string, unknown>) => void;
+  /** 审计行 host 值（缺省 detectHost()；测试注入以验宿主归属） */
+  host?: string;
 };
 
 /** 缺省求值函数：读 <configDir>/upstreams.json 组链；缺档/坏档回旧单端点链路（fail-open）。 */
@@ -92,7 +95,7 @@ function defaultWriteAudit(configDir: string, line: Record<string, unknown>): vo
  * PreToolUse：派单审核。
  * 放行/空任务/无规则/无违规 → {}；block 命中 → deny 输出；
  * warn 命中 → 提示落盘（键 tool_use_id，缺则 call_id），仍返 {}。
- * 审计每有求值落一行（含 host: "codebuddy"）；任何异常皆返 {}。
+ * 审计每有求值落一行（host 取 deps.host，缺省 detectHost() 判宿主）；任何异常皆返 {}。
  */
 export async function handlePre(
   input: unknown,
@@ -120,7 +123,10 @@ export async function handlePre(
     });
     if (!res) return passOutput();
 
-    (deps.writeAudit ?? defaultWriteAudit)(configDir, { ...res.line, host: "codebuddy" });
+    (deps.writeAudit ?? defaultWriteAudit)(configDir, {
+      ...res.line,
+      host: deps.host ?? detectHost(),
+    });
 
     if (res.violations.length === 0) return passOutput();
     if (mode === "warn") {

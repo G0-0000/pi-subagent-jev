@@ -17,7 +17,21 @@ export function resolveConfigDir(
 }
 
 /**
- * 钩子 stdin 之形状（CodeBuddy Code 所给）。
+ * 宿主判别：CODEBUDDY_PLUGIN_ROOT 非空白者归 CodeBuddy Code；
+ * 否则 CLAUDE_PLUGIN_ROOT 非空白者归 Claude Code；二者皆无则回缺省 codebuddy。
+ * 唯凭插件根环境变量，不读其它线索；纯函数，供审计行记 host 之用。
+ */
+export function detectHost(
+  env: Record<string, string | undefined> = process.env
+): string {
+  const isSet = (v: string | undefined): boolean => typeof v === "string" && v.trim() !== "";
+  if (isSet(env.CODEBUDDY_PLUGIN_ROOT)) return "codebuddy";
+  if (isSet(env.CLAUDE_PLUGIN_ROOT)) return "claude-code";
+  return "codebuddy";
+}
+
+/**
+ * 钩子 stdin 之形状（CodeBuddy Code 与 Claude Code 所给，字段名同）。
  * 字段名保持宿主原文；类型放宽为 unknown，解析侧逐项校验（畸形输入不抛）。
  */
 export type HookInput = {

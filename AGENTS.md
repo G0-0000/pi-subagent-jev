@@ -93,7 +93,7 @@ pi-subagent-jev/
 3. **任何错误 fail-open** — JEV 出错、配置档出错、概率缺失或 noul 字段缺失/非有限数皆放行（后者曾为漏洞，已修复：该规则标 `unknown` 不拦），绝不阻断派发、绝不外抛。`checkDispatch` 捕获一切异常返 `verdict:"error"` 行且 violations 为空
 
 ## 测试铁律
-- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 209 条）**全绿方可提交**
+- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 214 条）**全绿方可提交**
 - 测试不发真实 JEV 端点请求：`client.test.ts` 起本地 127.0.0.1 随机端口 mock HTTP server、真发 curl；`failover.test.ts` 纯逻辑＋注入时钟；`compliance.test.ts` 注入 `askFn`；`monitor*.test.ts` 注入概率＋假时钟。`scripts/calibrate.ts` 是唯一发真实请求的脚本，不进测试
 
 ## 配置与运行时
@@ -113,6 +113,7 @@ pi-subagent-jev/
 ## CodeBuddy 适配（v0.13.0）
 
 - 形态：插件根即仓库根；清单 .codebuddy-plugin/plugin.json，钩子 hooks/hooks.json，入口 bin/jev-hook（argv[2] = pre | post），适配逻辑 cb/。
+- 双宿主共用：hooks/hooks.json 与 bin/jev-hook 由 CodeBuddy Code 与 Claude Code 共用，钩子命令取 `${CLAUDE_PLUGIN_ROOT}/bin/jev-hook`（CodeBuddy ≥2.172.1 与 Claude Code 皆替换或注入该变量），Claude 侧清单另为 .claude-plugin/plugin.json；真实 Claude Code CLI 端到端验证尚待补。
 - 安装：codebuddy --plugin-dir ~/pi-subagent-jev；开发期可用 /reload-plugins 重载。
 - 配置：与 pi 侧同源，缺省 ~/.pi/agent/jev-comp（JEV_CONFIG_DIR 可覆写）；钩子为独立进程、每次触发重读，改档无须 /reload。
 - 语义：block 命中输出 hookSpecificOutput.permissionDecision="deny" 与同文 reason；warn 命中以 tool_use_id（缺则 call_id）落盘，PostToolUse 取回并附 additionalContext；审计行另有 host:"codebuddy"。
