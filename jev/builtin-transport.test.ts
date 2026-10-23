@@ -236,10 +236,10 @@ test("⑨ usage 缺省 {}；answers 非对象（undefined）→ 按失败计（�
   assert.deepEqual(res.usage, {}); // 缺省空 usage
 });
 
-test("⑩ score 答案归一：pi 平铺 {type:'score', score, confidence} → {score:{value, probabilities:{}, confidence}}；score/confidence 缺失或非有限、type 缺失按失败计", async () => {
+test("⑩ score 答案归一：pi 平铺 {type:'score', score, confidence} → {score:{type, probabilities:{}, value, confidence}}；score/confidence 缺失或非有限、type 缺失按失败计", async () => {
   const QUESTIONS2 = {
     ...QUESTIONS,
-    S1: { type: "score" as const, instructions: "Rate severity.", levels: { "1": "low", "2": "high" } },
+    S1: { type: "score" as const, instructions: "Rate severity.", criteria: ["low", "high"] },
   };
   const okAnswers = { ...OK_ANSWERS, S1: { type: "score", score: 2.4, confidence: 0.58 } };
   const { fn } = fakeClassify([{ stopReason: "stop", answers: okAnswers }]);
@@ -247,7 +247,9 @@ test("⑩ score 答案归一：pi 平铺 {type:'score', score, confidence} → {
     state: "S",
     questions: QUESTIONS2,
   });
-  assert.deepEqual(res.answers.S1, { score: { value: 2.4, probabilities: {}, confidence: 0.58 } });
+  assert.deepEqual(res.answers.S1, {
+    score: { type: "score", probabilities: {}, value: 2.4, confidence: 0.58 },
+  });
 
   const badScores: Array<Record<string, unknown>> = [
     { type: "score", confidence: 0.58 }, // score 缺失
@@ -311,7 +313,7 @@ test("⑪ usage 映射：pi {input, output, …} → {input_tokens, output_token
   assert.deepEqual(res3.usage, { output_tokens: 2 });
 });
 
-test("⑫ 出站映射：choice options→criteria（null/空白描述以键充当、criteria 判据并入）、score levels→criteria（string[] 按档位序）", async () => {
+test("⑫ 出站映射：choice options→criteria（null/空白描述以键充当、criteria 判据并入）、score criteria（string[] 按档位序）原样随行", async () => {
   const QUESTIONS2 = {
     R: {
       type: "choice" as const,
@@ -322,8 +324,7 @@ test("⑫ 出站映射：choice options→criteria（null/空白描述以键充�
     S: {
       type: "score" as const,
       instructions: "Rate severity.",
-      criteria: { "2": "medium pain" },
-      levels: { "1": null, "2": "medium", "3": "high" },
+      criteria: ["low", "medium", "high"],
     },
   };
   const answers = {
@@ -342,13 +343,13 @@ test("⑫ 出站映射：choice options→criteria（null/空白描述以键充�
     instructions: "Route it.",
     criteria: { pass: "nothing to do", review: "needs human eyes", block: "block" },
   });
-  // score：levels 映为 string[]（按档位序）；"2" 之描述与 criteria 判据并作一句
+  // score：criteria（string[]）原样出站，不另作拼装
   assert.deepEqual(q.S, {
     type: "score",
     instructions: "Rate severity.",
-    criteria: ["1", "medium；medium pain", "high"],
+    criteria: ["low", "medium", "high"],
   });
-  assert.ok(!("options" in q.R!) && !("levels" in q.S!)); // 我方字段名不出站
+  assert.ok(!("options" in q.R!)); // 我方字段名不出站
 });
 
 test("⑬ signal 透传：params.signal 有则随 classifyFn options 携行（{maxRetries:0, signal}）；无则 options 仅 {maxRetries:0}", async () => {

@@ -27,18 +27,31 @@ export type ChoiceQuestion = {
   criteria?: Record<string, string>;
   options: Record<string, string | null>;
 };
+/** 打分问句：criteria 为档位描述，按档位序——下标即分值（0..n-1）。
+ *  JEV 线形之 score 不产出 value，只回概率分布（legend ＋ probabilities），
+ *  故均值须由消费方按 sum(档位 × 概率) 自算（见 jev/permission.ts 之 meanScore）。 */
 export type ScoreQuestion = {
   type: "score";
   instructions: string;
-  criteria?: Record<string, string>;
-  levels: Record<string, string | null>;
+  criteria: string[];
 };
 export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
+
+/** score 答案：自管链（selfhost）为 {type, legend?, probabilities}，无 value/confidence；
+ *  builtin 链（pi 内建 classifier）只给标量分，故 value/confidence 可选、probabilities 空表。 */
+export type ScoreAnswer = {
+  type: "score";
+  /** 档位键 → 描述（selfhost 线形有则随行） */
+  legend?: Record<string, string>;
+  probabilities: Record<string, number>;
+  value?: number;
+  confidence?: number;
+};
 
 export type Answer =
   | { noul: number }
   | { choice: { value: string; probabilities: Record<string, number>; confidence: number } }
-  | { score: { value: number; probabilities: Record<string, number>; confidence: number } };
+  | { score: ScoreAnswer };
 
 export type Usage = { input_tokens?: number; output_tokens?: number; [k: string]: unknown };
 
@@ -407,28 +420,38 @@ function withAttempts(err: JevError, attempts: AttemptRecord[]): JevError {
   return err;
 }
 
-/** selfhost 线形归一：JEV `/v1/systemone` 之 choice 答案为平铺形
- *  `{type:"choice", choice:"<值>", probabilities, confidence}`（choice 为字符串），
- *  与我方嵌套契约 `{choice:{value,probabilities,confidence}}` 不符——depthVerdict 等消费方按后者读取。
- *  逐条归一：choice 为字符串即包为嵌套形；他型（noul/score）与他形一概原样保留。
+/** selfhost 线形归一：JEV `/v1/systemone` 之 choice/score 答案皆为平铺形——
+ *  choice 为 `{type:"choice", choice:"<值>", probabilities, confidence}`（choice 为字符串），
+ *  score 为 `{type:"score", legend?, probabilities}`（无 value/confidence，只有档位概率分布）。
+ *  二者与我方嵌套契约 `{choice:{…}}` / `{score:{…}}` 不符——depthVerdict、权限门等消费方按后者读取。
+ *  逐条归一：choice 为字符串即包为嵌套形，score 按 type 包为嵌套形；noul 与他形一概原样保留。
  *  单条归一异常不抛、留原形（fail-open：绝不因一条坏答案废整批）。 */
 function normalizeAnswers(raw: unknown): Record<string, Answer> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw as Record<string, Answer>;
   const src = raw as Record<string, unknown>;
   const out: Record<string, unknown> = {};
+  const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
   for (const [id, entry] of Object.entries(src)) {
     try {
       const o = entry as Record<string, unknown> | null;
-      if (o && typeof o === "object" && !Array.isArray(o) && typeof o.choice === "string") {
+      if (isPlainObject(o) && typeof o.choice === "string") {
         out[id] = {
           choice: {
             value: o.choice,
-            probabilities:
-              o.probabilities && typeof o.probabilities === "object" && !Array.isArray(o.probabilities)
-                ? o.probabilities
-                : {},
+            probabilities: isPlainObject(o.probabilities) ? o.probabilities : {},
             confidence:
               typeof o.confidence === "number" && Number.isFinite(o.confidence) ? o.confidence : 0,
+          },
+        };
+      } else if (isPlainObject(o) && o.type === "score" && !("score" in o)) {
+        out[id] = {
+          score: {
+            type: "score" as const,
+            ...(isPlainObject(o.legend) ? { legend: o.legend as Record<string, string> } : {}),
+            probabilities: isPlainObject(o.probabilities)
+              ? (o.probabilities as Record<string, number>)
+              : {},
           },
         };
       } else {

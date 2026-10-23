@@ -38,6 +38,7 @@ pi-subagent-jev/
 │   └── jev-hook               # CodeBuddy 钩子入口（Node 直跑 .ts，恒 exit 0）
 ├── cb/
 │   ├── hook-main.ts           # 适配主逻辑（pre / post 分派）
+│   ├── permission-main.ts     # 工具权限门钩子面（perm：本地判定 ＋ 概率兜底 ＋ 审计）
 │   ├── host.ts                # 钩子 IO、配置目录解析
 │   ├── warn-state.ts          # warn 暂存（文件态，TTL 3600s，容量 100）
 │   └── *.test.ts
@@ -49,6 +50,8 @@ pi-subagent-jev/
 │   ├── failover.ts            # failover 纯逻辑（解析校验/失败分类/冷却表）
 │   ├── failover.test.ts
 │   ├── compliance.ts          # 规则/判定/audit 行（纯逻辑，可测）
+│   ├── guard-questions.ts     # jev-guard 之风险/审批问句（逐字，MIT）＋未接线之扫描/指令问句
+│   ├── permission.ts          # 工具权限门纯逻辑（本地判定、阈值矩阵、审计、deny 规则）
 │   ├── warning-store.ts       # warn 模式 toolCallId 暂存（纯逻辑，可测）
 │   ├── monitor.ts             # 运行监控纯逻辑层（可测）
 │   ├── monitor-store.ts       # 监控状态暂存（纯逻辑，可测）
@@ -89,6 +92,28 @@ pi-subagent-jev/
 ## 运行监控（opt-in，v0.12.0）
 
 治运行中子 agent，与派单审核（派前）互不干扰，信号面亦不相交（彼钩 `tool_call`，此订 `subagent:control-event` ＋ RPC status）。**默认关闭**——唯 `~/.pi/agent/jev-comp/monitor.json` 存在、可解析且 `enabled:true` 方启用（坏档静默不启用，fail-open；仓内 `examples/monitor.sample.json` 仅示 schema）。配置键：`bashFirstCheckMs`（300000，bash 启动后首查总耗时阈值）／`bashRecheckMs`（600000，检查后复询间隔）／`sweepIntervalMs`（600000，兜底巡检：最近未获任何检查满此时长）／`maxCallsPerEval`（6）／`maxCharsPerCall`（800）／`maxStateChars`（8000），非法值逐字段回退缺省。三检测器＋兜底：bash 停滞／无效工具循环／无变化重复失败／无进展巡检；问句为内建常量 M001–M004（英文 instructions＋criteria，阈值 0.6/0.7/0.7/0.6，below/above/above/below），**不经 compliance-rules.json**。触发两线：事件线（`tool_failures` 与缓冲候选检测，信号＋窗口去重）＋时长线（30s tick 驱动 `dueChecks`，同 tick 每 run 合并一次求值；bash 检查「成败皆记」，证据有无皆转复询节奏）。命中以 `pi.sendMessage({triggerTurn:true})` 注入主会话，文案规则触发式（agent＋检测器＋证据节录＋置信度＋核查建议）；**仅提醒，绝不处置**。证据取公开接口（控制事件＋RPC `status` view transcript，前台 fleet 形／异步缩进文本形双解析），不读私有 transcript、不改 pi-subagents；证据不足→`unknown` 不告警。**监控唯主会话武装**（`PI_SUBAGENT_CHILD=1` 加载时即拒，前台/fork 子会话经 `session_start` 档径判别后 disarm；判别异常 fail-safe 向不武装）。**异步子之 bash 最早 240 秒方得见**（首个控制事件 `tool_open_threshold`/`time_threshold`，事件不重发）；异步形无错误标记可凭，M003 于异步恒不命中（弱证据之限）。求值复用 `ask()`（failover 链、每级一发、全链败 fail-open）；trainingLog 开时落 `source:"monitor"` 训练行。决策见 `docs/adr/0005-runtime-monitoring.md`。
+
+## 工具权限自动审批门（CodeBuddy 侧，opt-in）
+
+治「每个写/执行类工具都须人确认一遍」之烦：CodeBuddy 之 PreToolUse 钩子（matcher
+`^(Bash|Write|Edit|MultiEdit)$`，入口 `bin/jev-hook perm`，超时 8s）先作本地确定性判定，无定论者
+再问 JEV 之 risk（四档打分）与 approval 两问。**默认关闭**——唯 `<configDir>/auto-approve.json`
+存在且 `enabled:true` 方启用（缺档/坏档即关，fail-open）。配置键：`mode`（observe|auto，缺省 observe）、
+`tools`（缺省 Bash/Write/Edit/MultiEdit/WebFetch）、`risk.askScore|denyScore`（1.5/2.5，0..3）、
+`approval.askP`（0.75）、`destructiveAction`（ask|deny，缺省 ask）；坏值逐字段回缺省。
+
+三层判定，序不可易：**① 宿主 `permissions.deny` 命中即沉默**（`~/.codebuddy/settings.json` 与
+`<cwd>/.codebuddy/settings.json`；钩子之 allow 先于宿主权限规则、可越过 deny，故不可越权）；
+**② 本地确定性判定**（`jev/permission.ts`：按 `&& || ; |` 与换行切段〔引号内不切〕、引号感知分词、
+命令 basename 落只读/危险名单，路径参数展开 `~` 后解析为绝对路径与 cwd/home 相较；**绝不以命令原文
+子串判险**——`rg -e "rm -rf" src/` 之误报由此杜绝）；**③ 模型兜底**（`jev/guard-questions.ts` 之
+risk/approval，问句逐字取自 jev-guard，MIT），risk 均值达 denyScore → `destructiveAction`、达
+askScore 或 approval 达 askP → ask，余者 allow。`mode: observe` 只落审计；`auto` 始出
+allow/ask/deny。概率缺失、求值失败、任何异常 → 沉默（`{}`，宿主照旧弹窗），绝不据错误放行。
+求值每级上游 `timeoutMs` 压至 2000（三级 6s < 8s）、无重试；审计落 `<configDir>/audit.jsonl`，
+行含 `kind:"permission"` 与 `ts/host/tool/decision/risk/approval/latency_ms/excerpt`（excerpt 截 200
+字、遮蔽 `sk-*` 与长 bearer）。`user_requested`/`from_untrusted` 与 `SCAN_QUESTIONS`/
+`INSTRUCTION_QUESTIONS` 已备而**未接线**。详见 `docs/codebuddy.md`。
 
 ## 红线三条（贯穿一切改动）
 1. **key 绝不入仓/入日志/入错误文本** — key 之值不得出现在仓库内任何文件、日志、错误消息或返回文本中；仓外运行时配置档（env 档、upstreams.json，皆 600 权限）持有 key 乃既定先例（env 档先例），不在禁列

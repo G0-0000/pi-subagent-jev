@@ -19,13 +19,14 @@
 // 三型问句之形状映射（pi-ai classifier 线级形状 ≠ 我方自管链形状，双向皆映，见 pi-ai types.d.ts）：
 //   出站：noul→bool（instructions/criteria 原样随行）；choice 之 options（＋每选项 criteria 判据）
 //   映为 pi 之 criteria: Record<string,string>——pi 之 choice 无独立 options 槽位，criteria 键即
-//   选项 id（答案概率按键分布，pi 内建 jev/auto 同款用法）；score 之 levels 映为 pi 之
-//   criteria: string[]（按档位序之刻度描述）。描述缺省（null/空白）以键本身充当，保选项集完整。
+//   选项 id（答案概率按键分布，pi 内建 jev/auto 同款用法）；score 之 criteria: string[] 原样随行
+//   （按档位序之刻度描述，pi 与自管链同形）。描述缺省（null/空白）以键本身充当，保选项集完整。
 //   入站：bool 答案 {type:"bool", probability} 映回我方 {noul: probability}（checkDispatch 读
 //   answers[id].noul 之约定不受影响）；choice/score 答案由 pi 之平铺形状归一为我方嵌套契约
-//   {choice:{value,probabilities,confidence}} / {score:{value,probabilities,confidence}}（与自管链
-//   裸响应同形；pi 之 score 答案无 probabilities，以空表充当）；usage 由 pi 之 {input,output,…}
-//   映为我方 {input_tokens,output_tokens}（与自管链 usage 同形）。任一答案缺字段/非法 → 整批无效。
+//   {choice:{value,probabilities,confidence}} / {score:{type,probabilities,value,confidence}}（与自管链
+//   裸响应同族；pi 之 score 答案只给标量分、无 probabilities，故以空表充当并留 value/confidence）；
+//   usage 由 pi 之 {input,output,…} 映为我方 {input_tokens,output_tokens}（与自管链 usage 同形）。
+//   任一答案缺字段/非法 → 整批无效。
 // signal：params.signal（有则）随 options 透传 classifyFn（jev_ask 之取消信号；派单拦截无信号）。
 // model 字段：成功结果之 model 记胜出条目名（"<provider>/<model>"），自辨链路级次。
 // model 参数：接受但忽略——链路条目各用自身已解析模型（selfhost 链「显式 model 参覆首级」之例
@@ -95,10 +96,8 @@ function toWireQuestions(questions: Record<string, Question>): Record<string, un
       }
       out[id] = { type: "choice", instructions: q.instructions, criteria };
     } else {
-      const criteria = Object.entries(q.levels).map(([key, desc]) =>
-        criteriaText(key, desc, q.criteria?.[key])
-      );
-      out[id] = { type: "score", instructions: q.instructions, criteria };
+      // score：criteria（string[]）pi 与自管链同形，原样随行
+      out[id] = { type: "score", instructions: q.instructions, criteria: q.criteria };
     }
   }
   return out;
@@ -151,14 +150,14 @@ function fromWireAnswers(
       const confidence = o.confidence;
       out[id] = { choice: { value: choice, probabilities, confidence } };
     } else {
-      // pi 平铺 {type:"score", score, confidence}（pi 不产出 probabilities）→
-      // 我方 {score:{value,…}}，probabilities 以空表充当（我方契约有此槽位）
+      // pi 平铺 {type:"score", score, confidence}（pi 不产出档位概率分布）→
+      // 我方 {score:{type, probabilities, value, confidence}}，probabilities 以空表充当
       if (o.type !== "score" || typeof o.score !== "number" || !Number.isFinite(o.score))
         return undefined;
       if (typeof o.confidence !== "number" || !Number.isFinite(o.confidence)) return undefined;
       const score = o.score;
       const confidence = o.confidence;
-      out[id] = { score: { value: score, probabilities: {}, confidence } };
+      out[id] = { score: { type: "score", probabilities: {}, value: score, confidence } };
     }
   }
   return out;

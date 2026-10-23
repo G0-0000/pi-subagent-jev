@@ -1,5 +1,5 @@
 {
-  "description": "JEV 派单审核：PreToolUse 拦截违规派单，PostToolUse 交付 warn 观察模式提示（CodeBuddy Code 与 Claude Code 共用）",
+  "description": "JEV 派单审核（Task|Agent）与工具权限自动审批门（Bash|Write|Edit|MultiEdit）；PostToolUse 交付 warn 观察模式提示（CodeBuddy Code 与 Claude Code 共用）",
   "hooks": {
     "PreToolUse": [
       {
@@ -9,6 +9,16 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/jev-hook pre",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "^(Bash|Write|Edit|MultiEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/jev-hook perm",
+            "timeout": 8
           }
         ]
       }

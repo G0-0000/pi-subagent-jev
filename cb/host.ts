@@ -98,6 +98,29 @@ export function denyPre(reason: string): Record<string, unknown> {
   };
 }
 
+/** PreToolUse 放行输出：permissionDecision=allow 先于宿主权限规则——含 permissions.deny，
+ *  故调用方须先自审 deny 规则，命中则不得用此（工具权限门见 cb/permission-main.ts）。 */
+export function allowPre(reason: string): Record<string, unknown> {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
+/** PreToolUse 求人审输出：permissionDecision=ask 交宿主照常弹窗。 */
+export function askPre(reason: string): Record<string, unknown> {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "ask",
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
 /** PostToolUse 附加上下文输出：警告文本追加于该次工具结果之后。 */
 export function contextPost(text: string): Record<string, unknown> {
   return {

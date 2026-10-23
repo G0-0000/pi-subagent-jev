@@ -230,7 +230,8 @@ test("⑨ choice 与 score 解析：selfhost 平铺线形归一为嵌套契约",
     res.end(
       JSON.stringify({
         model: "jev-1.13.0",
-        // 真实 selfhost 线形：choice 为字符串＋顶层 confidence/probabilities（score 未变，仍按既有形状）。
+        // 真实 selfhost 线形：choice 为字符串＋顶层 confidence/probabilities；
+        // score 为 {type, legend, probabilities}（无 value/confidence）。
         answers: {
           route: {
             type: "choice",
@@ -239,11 +240,9 @@ test("⑨ choice 与 score 解析：selfhost 平铺线形归一为嵌套契约",
             confidence: 0.72,
           },
           severity: {
-            score: {
-              value: 2.4,
-              probabilities: { "1": 0.1, "2": 0.6, "3": 0.3 },
-              confidence: 0.58,
-            },
+            type: "score",
+            legend: { "0": "none", "1": "low", "2": "medium", "3": "high" },
+            probabilities: { "0": 0.1, "1": 0.6, "2": 0.3 },
           },
         },
         usage: { input_tokens: 350, output_tokens: 40 },
@@ -255,7 +254,7 @@ test("⑨ choice 与 score 解析：selfhost 平铺线形归一为嵌套契约",
       state: "s",
       questions: {
         route: { type: "choice", instructions: "route it", options: { pass: null, review: null, block: null } },
-        severity: { type: "score", instructions: "severity", levels: { "1": "low", "2": "medium", "3": "high" } },
+        severity: { type: "score", instructions: "severity", criteria: ["none", "low", "medium", "high"] },
       },
       baseUrl: srv.url,
       apiKey: "k",
@@ -269,10 +268,12 @@ test("⑨ choice 与 score 解析：selfhost 平铺线形归一为嵌套契约",
     // 顶层平铺字段不得残留
     assert.equal((r.answers.route as Record<string, unknown>).choice, route);
     assert.ok(!("type" in (r.answers.route as Record<string, unknown>)));
-    // score：非 choice，原形保留（现状契约）
-    const sev = (r.answers.severity as { score: { value: number; probabilities: Record<string, number>; confidence: number } }).score;
-    assert.equal(sev.value, 2.4);
-    assert.equal(sev.confidence, 0.58);
+    // score：平铺 {type, legend, probabilities} → 嵌套 {score:{…}}（回归锁：去掉归一即失败）
+    const sev = (r.answers.severity as { score: { type: string; legend?: Record<string, string>; probabilities: Record<string, number> } }).score;
+    assert.equal(sev.type, "score");
+    assert.deepEqual(sev.legend, { "0": "none", "1": "low", "2": "medium", "3": "high" });
+    assert.deepEqual(sev.probabilities, { "0": 0.1, "1": 0.6, "2": 0.3 });
+    assert.ok(!("value" in sev)); // 线形无 value，不得凭空补出
   } finally {
     await srv.close();
   }

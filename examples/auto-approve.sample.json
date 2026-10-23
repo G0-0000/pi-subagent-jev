@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "mode": "observe",
+  "tools": ["Bash", "Write", "Edit", "MultiEdit", "WebFetch"],
+  "risk": { "askScore": 1.5, "denyScore": 2.5 },
+  "approval": { "askP": 0.75 },
+  "destructiveAction": "ask"
+}
