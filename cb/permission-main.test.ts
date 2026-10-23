@@ -3,12 +3,18 @@
 // 一律注入 mock askFn、临时配置目录与审计写入器，不发任何真实 JEV 请求。
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SystemOneResult } from "../jev/client.ts";
 import type { AskFn } from "../jev/compliance.ts";
-import { buildPermissionState, handlePermission, parseDenyRules, runPermissionHook } from "./permission-main.ts";
+import {
+  buildPermissionState,
+  defaultWriteAudit,
+  handlePermission,
+  parseDenyRules,
+  runPermissionHook,
+} from "./permission-main.ts";
 
 const CWD = "/home/g0/proj";
 const HOME = "/home/g0";
@@ -263,3 +269,21 @@ test("⑬ 半份概率（唯 risk 或唯 approval）→ silent：绝不据半份
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("⑭ defaultWriteAudit：配置目录缺时自建（0700），审计行追加于 audit.jsonl", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "jev-perm-cb-"));
+  const dir = path.join(root, "nested", "jev-comp");
+  try {
+    assert.equal(existsSync(dir), false);
+    defaultWriteAudit(dir, '{"kind":"permission","decision":"allow"}');
+    assert.equal(statSync(dir).mode & 0o777, 0o700, "自建目录须为 0700");
+    defaultWriteAudit(dir, '{"kind":"permission","decision":"ask"}');
+    const lines = readFileSync(path.join(dir, "audit.jsonl"), "utf-8").trim().split("\n");
+    assert.equal(lines.length, 2);
+    assert.equal((JSON.parse(lines[0]!) as Record<string, unknown>).decision, "allow");
+    assert.equal((JSON.parse(lines[1]!) as Record<string, unknown>).decision, "ask");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

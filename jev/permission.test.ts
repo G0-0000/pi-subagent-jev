@@ -9,6 +9,7 @@ import {
   assessLocally,
   buildPermissionAudit,
   decidePermission,
+  DEFAULT_PERMISSION_TOOLS,
   defaultPermissionConfig,
   denyRulesMatch,
   loadPermissionConfig,
@@ -381,6 +382,38 @@ test("⑰ ~user 与 ~+/-：静态不可判者 ask；~ 与 ~<当前用户> 照常
   assert.equal(bash("cat ~/notes/a.md"), "allow");
   assert.equal(bash("cat ~"), "allow");
   assert.equal(write("~root/.bashrc"), "ask");
+});
+
+test("⑲ git 之 --output 写档、jq 程序内之 >、tree 之 -o 连写形皆不认只读（交模型）", () => {
+  // --output=PATH 整只一词、起首为 -，路径扫描看不出：须由 git 判定自身拦下
+  assert.equal(bash("git diff --output=/tmp/evil f"), "pass");
+  assert.equal(bash("git log --output=/tmp/evil"), "pass");
+  assert.equal(bash("git show --output=/tmp/evil"), "pass");
+  assert.equal(bash("git log --grep=--output"), "allow"); // 引号内作值者不误伤（- 起首非旗标位）
+  assert.equal(bash("git status --short"), "allow");
+  // jq 之程序在引号内，> 由 jq 自身执行（写档／重定向）
+  assert.equal(bash('jq -n \'"x" > "/tmp/evil"\''), "pass");
+  assert.equal(bash("jq '.a' package.json"), "allow");
+  // tree 之 -oFILE 连写形同理
+  assert.equal(bash("tree -o/tmp/evil ."), "pass");
+  assert.equal(bash("tree -L 2 src"), "allow");
+  // git grep 入只读名单，然 -O/--open-files-in-pager 可执行外部程序，仍交模型
+  assert.equal(bash("git grep foo src"), "allow");
+  assert.equal(bash("git grep -Osh foo src"), "pass");
+  assert.equal(bash("git grep --open-files-in-pager=sh foo"), "pass");
+});
+
+test("⑳ isUnder：唯 \"..\" 与 \"../…\" 算越界，\"..x\"/\"...\" 之目录名不得误判", () => {
+  assert.equal(bash("cat /home/g0/.../a.ts"), "allow");
+  assert.equal(bash("cat /home/g0/..cache/a.ts"), "allow");
+  assert.equal(write("/home/g0/proj/..notes/a.ts"), "allow");
+  // 真越界（解析后出 cwd/home 之外）仍 ask
+  assert.equal(bash("cat /home/g0/../srv/a.ts"), "ask");
+});
+
+test("㉑ 缺省工具集即宿主会弹窗之四件写/执行工具", () => {
+  assert.deepEqual(DEFAULT_PERMISSION_TOOLS, ["Bash", "Write", "Edit", "MultiEdit"]);
+  assert.deepEqual(defaultPermissionConfig().tools, ["Bash", "Write", "Edit", "MultiEdit"]);
 });
 
 test("⑱ deny 规则匹配：前导空白/复合命令/赋值前缀皆中；畸形规则视为命中", () => {

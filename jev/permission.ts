@@ -165,7 +165,7 @@ const READ_ONLY_COMMANDS = new Set([
 ]);
 /** git 之只读子命令（branch/remote 唯列示形，另判）。 */
 const GIT_READ_ONLY = new Set([
-  "status", "diff", "log", "show", "rev-parse", "blame", "describe", "shortlog", "ls-files",
+  "status", "diff", "log", "show", "rev-parse", "blame", "describe", "shortlog", "ls-files", "grep",
 ]);
 /** git branch / remote 之列示旗标：余者（-d/-D/-m、add/remove/set-url 等）皆写。 */
 const GIT_BRANCH_LIST = /^(-[alrv]+|--list|--all|--remotes|--show-current|--contains|--merged|--no-merged)$/;
@@ -211,10 +211,12 @@ function expandPath(spec: string, ctx: Ctx): string | null {
   return path.resolve(ctx.cwd, spec);
 }
 
-/** child 是否在 parent 之内（含相等）。 */
+/** child 是否在 parent 之内（含相等）。上跳唯认「..」与「../…」，如「..x」「...」之目录名不算越界。 */
 function isUnder(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  if (rel === "") return true;
+  if (rel === ".." || rel.startsWith(".." + path.sep)) return false;
+  return !path.isAbsolute(rel);
 }
 
 function underRoots(p: string, ctx: Ctx): boolean {
@@ -366,6 +368,8 @@ function awkEscapes(words: string[]): boolean {
 
 /**
  * git 是否只读：-c／--config-env／--paginate 皆可令 git 执行外部程序（别名、pager），一律不认；
+ * --output=PATH 直接写任意档（diff/log/show 皆有此旗标，且整只为一词、路径扫描看不出），亦不认；
+ * grep 之 -O/--open-files-in-pager 同样执行外部程序，一并排除。
  * branch／remote 唯列示形为只读（-d/-D/-m、add/remove/set-url 等皆写）。
  */
 function isReadOnlyGit(words: string[]): boolean {
@@ -373,6 +377,8 @@ function isReadOnlyGit(words: string[]): boolean {
   if (before.some((w) => w === "-c" || w.startsWith("--config-env") || w === "--paginate")) {
     return false;
   }
+  if (hasFlag(words, /^--output(=|$)/)) return false;
+  if (subcommand(words) === "grep" && hasFlag(words, /^-O|^--open-files-in-pager/)) return false;
   const sub = subcommand(words);
   if (sub === "branch") return words.slice(2).every((w) => GIT_BRANCH_LIST.test(w));
   if (sub === "remote") return words.slice(2).every((w) => GIT_REMOTE_LIST.test(w));
@@ -398,6 +404,10 @@ function isReadOnly(cmd: string, words: string[]): boolean {
   if (cmd === "rg" && hasFlag(words, /^--pre(=|$)/)) return false;
   if (cmd === "fd" && hasFlag(words, /^-(x|X)$|^--exec(-batch)?$/)) return false;
   if (cmd === "awk" && awkEscapes(words)) return false;
+  // jq 之程序在引号内，> 不属壳重定向、径由重定向分析看不出：程序里凡有 > 皆不认只读
+  if (cmd === "jq" && words.some((w) => w.includes(">"))) return false;
+  // tree 之 -o FILE 写档（连写形 -o/tmp/x 唯作一词，路径扫描看不出）
+  if (cmd === "tree" && hasFlag(words, /^-o/)) return false;
   return READ_ONLY_COMMANDS.has(cmd);
 }
 

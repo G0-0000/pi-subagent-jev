@@ -73,7 +73,7 @@ function defaultReadText(filePath: string): string | null {
  * 缺省审计写入：先尽力建目录（0700），再追加。建目录失败不外抛——追加自会抛，由调用方静默；
  * 此举免「目录未建则审计永远无声消失」（observe 模式无从核对之弊）。
  */
-function defaultWriteAudit(configDir: string, line: string): void {
+export function defaultWriteAudit(configDir: string, line: string): void {
   try {
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
   } catch {
