@@ -99,20 +99,26 @@ pi-subagent-jev/
 `^(Bash|Write|Edit|MultiEdit)$`，入口 `bin/jev-hook perm`，超时 8s）先作本地确定性判定，无定论者
 再问 JEV 之 risk（四档打分）与 approval 两问。**默认关闭**——唯 `<configDir>/auto-approve.json`
 存在且 `enabled:true` 方启用（缺档/坏档即关，fail-open）。配置键：`mode`（observe|auto，缺省 observe）、
-`tools`（缺省 Bash/Write/Edit/MultiEdit/WebFetch）、`risk.askScore|denyScore`（1.5/2.5，0..3）、
-`approval.askP`（0.75）、`destructiveAction`（ask|deny，缺省 ask）；坏值逐字段回缺省。
+`tools`（缺省 Bash/Write/Edit/MultiEdit，唯钩子 matcher 所列者）、`risk.askScore|denyScore`
+（1.5/2.5，0..3）、`approval.askP`（0.75）、`destructiveAction`（ask|deny，缺省 ask）；坏值逐字段回缺省。
 
 三层判定，序不可易：**① 宿主 `permissions.deny` 命中即沉默**（`~/.codebuddy/settings.json` 与
-`<cwd>/.codebuddy/settings.json`；钩子之 allow 先于宿主权限规则、可越过 deny，故不可越权）；
-**② 本地确定性判定**（`jev/permission.ts`：按 `&& || ; |` 与换行切段〔引号内不切〕、引号感知分词、
-命令 basename 落只读/危险名单，路径参数展开 `~` 后解析为绝对路径与 cwd/home 相较；**绝不以命令原文
-子串判险**——`rg -e "rm -rf" src/` 之误报由此杜绝）；**③ 模型兜底**（`jev/guard-questions.ts` 之
-risk/approval，问句逐字取自 jev-guard，MIT），risk 均值达 denyScore → `destructiveAction`、达
-askScore 或 approval 达 askP → ask，余者 allow。`mode: observe` 只落审计；`auto` 始出
-allow/ask/deny。概率缺失、求值失败、任何异常 → 沉默（`{}`，宿主照旧弹窗），绝不据错误放行。
-求值每级上游 `timeoutMs` 压至 2000（三级 6s < 8s）、无重试；审计落 `<configDir>/audit.jsonl`，
-行含 `kind:"permission"` 与 `ts/host/tool/decision/risk/approval/latency_ms/excerpt`（excerpt 截 200
-字、遮蔽 `sk-*` 与长 bearer）。`user_requested`/`from_untrusted` 与 `SCAN_QUESTIONS`/
+`<cwd>/.codebuddy/settings.json`；钩子之 allow 先于宿主权限规则、可越过 deny，故不可越权；Bash 规则
+比之于归一后之整条与各切段——去空白、去 `VAR=value` 前缀、按 `&& || ; |` 切段，形不可解析者亦视为
+命中，宁过勿漏）；**② 本地确定性判定**（`jev/permission.ts`：按 `&& || ; |` 与换行切段〔引号内不切〕、
+引号感知分词、命令 basename 落只读/危险名单，路径参数展开 `~` 后解析为绝对路径与 cwd/home 相较；
+**绝不以命令原文子串判险**——`rg -e "rm -rf" src/` 之误报由此杜绝。只读名单不含 sed（GNU sed 之 `e`
+命令、`s///e` 旗标执行命令，`w`/`r` 读写任意档），awk 之 `system(`／管道／`>`／`-f`、rg 之 `--pre`、
+sort 之 `--compress-program`、fd 之 `-x/-X` 皆不认只读，`bash|sh|zsh -c` 之脚本递归再判〔深限 2 层，
+越限或不可解析者 pass，绝不 allow〕，`~user`/`~+`/`~-` 之不可静态展开者一律 ask）；
+**③ 模型兜底**（`jev/guard-questions.ts` 之 risk/approval，问句逐字取自 jev-guard，MIT），risk 均值
+达 denyScore → `destructiveAction`、达 askScore 或 approval 达 askP → ask，余者 allow。`mode: observe`
+只落审计；`auto` 始出 allow/ask/deny。risk 与 approval 须俱为有限数方出决断，任一缺失、求值失败、
+任何异常 → 沉默（`{}`，宿主照旧弹窗），绝不据半份证据与错误放行。
+求值每级上游 `timeoutMs` 压至 2000（三级 6s < 8s）、无重试；审计落 `<configDir>/audit.jsonl`
+（写入前尽力建目录，0700），行含 `kind:"permission"` 与
+`ts/host/tool/decision/risk/approval/latency_ms/excerpt`（excerpt 截 200 字、遮蔽 `sk-*`、12 字以上
+bearer 与 `Authorization` 头之值）。`user_requested`/`from_untrusted` 与 `SCAN_QUESTIONS`/
 `INSTRUCTION_QUESTIONS` 已备而**未接线**。详见 `docs/codebuddy.md`。
 
 ## 红线三条（贯穿一切改动）
@@ -121,7 +127,7 @@ allow/ask/deny。概率缺失、求值失败、任何异常 → 沉默（`{}`，
 3. **任何错误 fail-open** — JEV 出错、配置档出错、概率缺失或 noul 字段缺失/非有限数皆放行（后者曾为漏洞，已修复：该规则标 `unknown` 不拦），绝不阻断派发、绝不外抛。`checkDispatch` 捕获一切异常返 `verdict:"error"` 行且 violations 为空
 
 ## 测试铁律
-- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 214 条）**全绿方可提交**
+- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 245 条）**全绿方可提交**
 - 测试不发真实 JEV 端点请求：`client.test.ts` 起本地 127.0.0.1 随机端口 mock HTTP server、真发 curl；`failover.test.ts` 纯逻辑＋注入时钟；`compliance.test.ts` 注入 `askFn`；`monitor*.test.ts` 注入概率＋假时钟。`scripts/calibrate.ts` 是唯一发真实请求的脚本，不进测试
 
 ## 配置与运行时

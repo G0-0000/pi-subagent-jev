@@ -245,3 +245,21 @@ test("⑫ runPermissionHook：坏 stdin/非 JSON/缺 argv 皆沉默；perm 分�
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("⑬ 半份概率（唯 risk 或唯 approval）→ silent：绝不据半份证据放行", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto" });
+  const audit: string[] = [];
+  const riskOnly: AskFn = async () => answers({ "0": 0.9, "1": 0.1 }, undefined);
+  const approvalOnly: AskFn = async () => answers(undefined, 0.1);
+  try {
+    const input = hookInput({ tool_input: { command: "rm -rf ~/ttt" } });
+    assert.deepEqual(await run(input, dir, { audit, askFn: riskOnly }), {});
+    assert.deepEqual(await run(input, dir, { audit, askFn: approvalOnly }), {});
+    assert.equal(audit.length, 2);
+    for (const line of audit) {
+      assert.equal((JSON.parse(line) as Record<string, unknown>).decision, "silent");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

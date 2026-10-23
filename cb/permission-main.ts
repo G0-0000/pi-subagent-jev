@@ -6,7 +6,7 @@
 //   1. 宿主 deny 规则命中即沉默（返 {}）——钩子之 allow 可越过 permissions.deny，绝不能以 allow 覆盖用户显式拒绝。
 //   2. 任何错误/超时 → 沉默（返 {}），绝不因错误而放行。
 //   3. 钩子须在超时内归：链上每级 timeoutMs 压至 2000（最坏三级 6s < 钩子 8s），且绝无重试。
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ask, type SystemOneResult } from "../jev/client.ts";
@@ -69,7 +69,16 @@ function defaultReadText(filePath: string): string | null {
   }
 }
 
+/**
+ * 缺省审计写入：先尽力建目录（0700），再追加。建目录失败不外抛——追加自会抛，由调用方静默；
+ * 此举免「目录未建则审计永远无声消失」（observe 模式无从核对之弊）。
+ */
 function defaultWriteAudit(configDir: string, line: string): void {
+  try {
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  } catch {
+    /* 建目录失败：下之追加自会失败，由调用方静默 */
+  }
   appendFileSync(path.join(configDir, "audit.jsonl"), line + "\n");
 }
 

@@ -63,7 +63,7 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
 | --- | --- | --- |
 | `enabled` | false | 总开关；档缺/坏/缺此键即关（fail-open） |
 | `mode` | observe | observe 只落审计、不改宿主行为；auto 始出决断 |
-| `tools` | Bash/Write/Edit/MultiEdit/WebFetch | 管辖之工具名（大小写不敏感） |
+| `tools` | Bash/Write/Edit/MultiEdit | 管辖之工具名（大小写不敏感；唯钩子 matcher 所列者可管） |
 | `risk.askScore` / `risk.denyScore` | 1.5 / 2.5 | risk 均值之阈值（档位 0..3） |
 | `approval.askP` | 0.75 | 「须人审」概率阈值 |
 | `destructiveAction` | ask | risk 达 denyScore 时之处置：ask 或 deny |
@@ -75,32 +75,38 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
 
 1. **宿主 deny 规则**（`~/.codebuddy/settings.json` 与 `<cwd>/.codebuddy/settings.json` 之
    `permissions.deny`）命中即沉默（返 `{}`）。缘由：钩子之 allow **先于**宿主一切权限规则（含
-   `permissions.deny`），凡用户显式拒绝者，本门绝不以 allow 覆盖。
+   `permissions.deny`），凡用户显式拒绝者，本门绝不以 allow 覆盖。Bash 规则比之于归一后之整条
+   命令与各切段（去空白、去 `VAR=value` 前缀，按 `&& || ; |` 切段）；规则形不可解析者亦视为
+   命中——本门唯沉默，宿主照旧弹窗，宁过勿漏。
 2. **本地确定性判定**（`jev/permission.ts`）：Bash 命令按 `&& || ; |` 与换行切段（引号内不切），
-   逐段引号感知分词，取命令 basename 落名单；只读名单（ls/cat/rg/grep/fd/jq/sed（无 -i）/awk/
-   git status|diff|log|show|branch|remote|rev-parse/npm|pnpm|yarn test|ci|run build|run lint/
-   node --test/python -m pytest/cargo test|check|clippy|build/go test|build|vet/make/tsc 等）
-   且诸路径参数皆在 cwd 或家目录内 → allow；危险命令（sudo/su/shutdown/reboot/mkfs*/dd of=/dev/、
-   systemctl/crontab/管道注入 curl|sh、rm -r 指根或家目录或当前目录或越界或通配、chmod|chown -R
-   指根或家目录、越界路径、`$` 变量与反引号）→ ask。写类工具按 `file_path` 判：cwd 或家目录内
+   逐段引号感知分词，取命令 basename 落名单；只读名单（ls/cat/rg/grep/fd/jq/awk/sort/
+   git status|diff|log|show|rev-parse|branch（唯列示）/remote（唯列示）/npm|pnpm|yarn test|ci|
+   run build|run lint/node --test/python -m pytest/cargo test|check|clippy|build/go test|build|vet/
+   make/tsc 等）且诸路径参数皆在 cwd 或家目录内 → allow。**sed 不入名单**——GNU sed 之 `e` 命令、
+   `s///e` 旗标执行命令，`w`/`r` 命令读写任意档；awk 之 `system(`／管道／`>` 重定向／`-f` 载入
+   程序、rg 之 `--pre`、sort 之 `--compress-program`、fd 之 `-x/-X` 同属嵌套执行或写档，另判不认
+   只读；`bash|sh|zsh -c` 之脚本递归再判（深限 2 层，越限或不可解析者 pass，绝不 allow）。
+   危险命令（sudo/su/shutdown/reboot/mkfs*/dd of=/dev/、systemctl/crontab/管道注入 curl|sh、
+   rm -r 指根或家目录或当前目录或越界或通配、chmod|chown -R 指根或家目录、越界路径、`~user`/`~+`/
+   `~-` 之不可静态展开者、`$` 变量与反引号）→ ask。写类工具按 `file_path` 判：cwd 或家目录内
    → allow，越界 → ask；`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.config/jev-comp`、
    `~/.codebuddy/settings*.json`、`.env*`、`*.pem`、`*.key`、`id_rsa*` 纵在家目录内亦 ask。
    **绝不以命令原文之子串匹配**判险——`rg -e "rm -rf" src/` 之误报由此杜绝（此为宿主旧判定之弊）。
 3. **模型兜底**：本地无定论者，以 jev-guard（MIT，leepokai）之 risk 与 approval 两问求值，问句逐字
    沿用（见 `jev/guard-questions.ts`）。risk 均值达 denyScore → `destructiveAction`；达 askScore
-   或 approval 达 askP → ask；余者 allow。概率缺失或求值失败 → 沉默（宿主照旧弹窗），绝不据错误放行。
+   或 approval 达 askP → ask；余者 allow。risk 与 approval **须俱为有限数**方出决断，任一缺失或
+   求值失败 → 沉默（宿主照旧弹窗），绝不据半份证据与错误放行。
 
 求值时每级上游 `timeoutMs` 压至 2000（三级最坏 6s < 钩子 8s），且无重试（红线②照旧）。
 
 审计：每次判定落一行于 `<configDir>/audit.jsonl`，键为
 `ts / host / kind:"permission" / tool / decision / risk / approval / latency_ms / excerpt`；
-`excerpt` 截 200 字，并遮蔽 `sk-*` 与长 bearer token；求值失败之行列 `decision:"silent"` 并附
-`error`。审计写入失败静默吞（不影响工具调用）。
+`excerpt` 截 200 字，并遮蔽 `sk-*`、12 字以上之 bearer token 与 `Authorization` 头之值（不论
+长短）；求值失败之行列 `decision:"silent"` 并附 `error`。审计写入前尽力建目录（0700），写入失败
+静默吞（不影响工具调用）。
 
-**已知之限**：`tools` 缺省含 WebFetch，然本批钩子 matcher 唯 `^(Bash|Write|Edit|MultiEdit)$`，
-故 WebFetch 暂不生效（后续加宽 matcher 再议）；本地名单只识常见命令，未列者落模型（多耗一次求值，
-不失安全）；`user_requested` 与 `from_untrusted` 两问已备而**未接线**（须用户近期消息与不可信内容
-之上下文，本批尚无）。
+**已知之限**：本地名单只识常见命令，未列者落模型（多耗一次求值，不失安全）；`user_requested` 与
+`from_untrusted` 两问已备而**未接线**（须用户近期消息与不可信内容之上下文，本批尚无）。
 
 ## Skill
 

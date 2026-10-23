@@ -27,8 +27,8 @@ export type PermissionConfig = {
   destructiveAction: DestructiveAction;
 };
 
-/** 缺省工具集：宿主会为人审弹窗之写/执行类工具。 */
-export const DEFAULT_PERMISSION_TOOLS = ["Bash", "Write", "Edit", "MultiEdit", "WebFetch"];
+/** 缺省工具集：宿主会为人审弹窗之写/执行类工具（唯 hooks.json matcher 所列者；WebFetch 不在其列）。 */
+export const DEFAULT_PERMISSION_TOOLS = ["Bash", "Write", "Edit", "MultiEdit"];
 
 /** 缺省配置：关闭。每次返回新对象，免跨调用共享可变态。 */
 export function defaultPermissionConfig(): PermissionConfig {
@@ -152,19 +152,32 @@ export function noulProbability(answer: unknown): number | undefined {
 /** allow：本地即判安全，无须求值；ask：本地即判须人审；pass：本地无定论，交模型。 */
 export type LocalVerdict = "allow" | "ask" | "pass";
 
-/** 只读命令（皆在路径参数不出 cwd/home 之前提下方 allow）。 */
+/**
+ * 只读命令（皆在路径参数不出 cwd/home 之前提下方 allow）。
+ * 入名单者须无「嵌套执行」与「越界写档」之途：sed 故不入——GNU sed 之 e 命令与 s///e 旗标执行
+ * 任意命令，w/r 命令写读任意档。awk/rg/sort 之同类逃逸另于 isReadOnly 单判；
+ * find 亦不入（-delete/-exec 之害须另设排除方可用，不值其繁）。
+ */
 const READ_ONLY_COMMANDS = new Set([
-  "ls", "cat", "head", "tail", "wc", "rg", "grep", "fd", "tree", "jq", "sed", "awk", "sort",
+  "ls", "cat", "head", "tail", "wc", "rg", "grep", "fd", "tree", "jq", "awk", "sort",
   "uniq", "cut", "tr", "diff", "comm", "stat", "file", "du", "df", "which", "pwd", "echo",
   "printf", "true", "basename", "dirname", "realpath", "make", "tsc",
 ]);
-const GIT_READ_ONLY = new Set(["status", "diff", "log", "show", "branch", "remote", "rev-parse"]);
+/** git 之只读子命令（branch/remote 唯列示形，另判）。 */
+const GIT_READ_ONLY = new Set([
+  "status", "diff", "log", "show", "rev-parse", "blame", "describe", "shortlog", "ls-files",
+]);
+/** git branch / remote 之列示旗标：余者（-d/-D/-m、add/remove/set-url 等）皆写。 */
+const GIT_BRANCH_LIST = /^(-[alrv]+|--list|--all|--remotes|--show-current|--contains|--merged|--no-merged)$/;
+const GIT_REMOTE_LIST = /^(-v|--verbose|show)$/;
 const PKG_MANAGERS = new Set(["npm", "pnpm", "yarn"]);
 const PKG_RUN_SAFE = new Set(["build", "lint"]);
 const CARGO_READ_ONLY = new Set(["test", "check", "clippy", "build"]);
 const GO_READ_ONLY = new Set(["test", "build", "vet"]);
 const SHELLS = new Set(["sh", "bash", "zsh", "ksh", "dash"]);
 const FETCHERS = new Set(["curl", "wget"]);
+/** 壳之 -c 递归上限：再深则不可判，一律 pass。 */
+const MAX_SHELL_DEPTH = 2;
 
 /** 无论参数如何皆须人审之命令。 */
 const ALWAYS_ASK = new Set([
@@ -183,12 +196,19 @@ const SAFE_SINKS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty
 
 type Ctx = { cwd: string; home: string };
 
-/** 展开 ~ 并解析为绝对路径（相对路径以 cwd 为基）。 */
-function expandPath(spec: string, ctx: Ctx): string {
-  let s = spec;
-  if (s === "~") s = ctx.home;
-  else if (s.startsWith("~/")) s = path.join(ctx.home, s.slice(2));
-  return path.resolve(ctx.cwd, s);
+/**
+ * 展开 ~ 并解析为绝对路径（相对路径以 cwd 为基）；不可静态判定者返 null。
+ * 唯 `~`、`~/…` 与 `~<当前用户>/…` 可展开；他形（~user、~+、~-）壳会展开至别处
+ * （如 ~root 即 /root），静态不可判，调用方一律 ask。
+ */
+function expandPath(spec: string, ctx: Ctx): string | null {
+  const user = path.basename(ctx.home);
+  if (spec === "~") return path.resolve(ctx.home);
+  if (spec.startsWith("~/")) return path.resolve(ctx.home, spec.slice(2));
+  if (spec === "~" + user) return path.resolve(ctx.home);
+  if (spec.startsWith("~" + user + "/")) return path.resolve(ctx.home, spec.slice(user.length + 2));
+  if (spec.startsWith("~")) return null;
+  return path.resolve(ctx.cwd, spec);
 }
 
 /** child 是否在 parent 之内（含相等）。 */
@@ -332,9 +352,36 @@ function hasFlag(words: string[], re: RegExp): boolean {
   return words.slice(1).some((w) => re.test(w));
 }
 
+/** awk 之逃逸途：system()／管道／重定向写档／@include，及自档载入程序之 -f/-i/-l（含长形）。 */
+function awkEscapes(words: string[]): boolean {
+  return words.some(
+    (w) =>
+      w.includes("system(") ||
+      w.includes("|") ||
+      w.includes(">") ||
+      w.includes("@include") ||
+      /^-(f|i|l)|^--(file|include|load)/.test(w)
+  );
+}
+
+/**
+ * git 是否只读：-c／--config-env／--paginate 皆可令 git 执行外部程序（别名、pager），一律不认；
+ * branch／remote 唯列示形为只读（-d/-D/-m、add/remove/set-url 等皆写）。
+ */
+function isReadOnlyGit(words: string[]): boolean {
+  const before = words.slice(1);
+  if (before.some((w) => w === "-c" || w.startsWith("--config-env") || w === "--paginate")) {
+    return false;
+  }
+  const sub = subcommand(words);
+  if (sub === "branch") return words.slice(2).every((w) => GIT_BRANCH_LIST.test(w));
+  if (sub === "remote") return words.slice(2).every((w) => GIT_REMOTE_LIST.test(w));
+  return GIT_READ_ONLY.has(sub);
+}
+
 /** 只读判定（仅就命令 basename 与参数而言；路径越界另由调用方先判）。 */
 function isReadOnly(cmd: string, words: string[]): boolean {
-  if (cmd === "git") return GIT_READ_ONLY.has(subcommand(words));
+  if (cmd === "git") return isReadOnlyGit(words);
   if (PKG_MANAGERS.has(cmd)) {
     const sub = subcommand(words);
     if (sub === "test" || sub === "ci") return true;
@@ -346,12 +393,11 @@ function isReadOnly(cmd: string, words: string[]): boolean {
   }
   if (cmd === "cargo") return CARGO_READ_ONLY.has(subcommand(words));
   if (cmd === "go") return GO_READ_ONLY.has(subcommand(words));
-  // 就地改写者一律不认只读
-  if (cmd === "sed" && hasFlag(words, /^-i|^--in-place/)) return false;
-  if (cmd === "sort" && hasFlag(words, /^-o|^--output/)) return false;
+  // 就地改写或可执行外部程序者一律不认只读
+  if (cmd === "sort" && hasFlag(words, /^-o|^--output|^--compress-program/)) return false;
+  if (cmd === "rg" && hasFlag(words, /^--pre(=|$)/)) return false;
   if (cmd === "fd" && hasFlag(words, /^-(x|X)$|^--exec(-batch)?$/)) return false;
-  // awk 之 system() 与管道至壳可执行任意命令
-  if (cmd === "awk" && words.some((w) => w.includes("system(") || w.includes("|"))) return false;
+  if (cmd === "awk" && awkEscapes(words)) return false;
   return READ_ONLY_COMMANDS.has(cmd);
 }
 
@@ -364,7 +410,7 @@ function isDestructive(cmd: string, words: string[], ctx: Ctx): boolean {
     const targets = words.slice(1).filter((w) => !w.startsWith("-"));
     for (const t of targets) {
       const p = expandPath(t, ctx);
-      if (p === path.parse(p).root || p === ctx.home) return true;
+      if (p === null || p === path.parse(p).root || p === ctx.home) return true;
     }
   }
   return false;
@@ -383,6 +429,7 @@ function isDangerousRm(cmd: string, words: string[], ctx: Ctx): boolean {
   for (const t of targets) {
     if (/[?*]|\[/.test(t)) return true; // 通配：范围不可静态确定
     const p = expandPath(t, ctx);
+    if (p === null) return true; // ~user 等：静态不可判
     if (p === ctx.cwd || p === ctx.home || p === path.parse(p).root) return true;
     if (!underRoots(p, ctx)) return true;
   }
@@ -409,13 +456,14 @@ function analyzeRedirects(words: string[], ctx: Ctx): { verdict: LocalVerdict; s
     }
     if (target === "" || target.startsWith("&")) continue; // 2>&1 之类：fd 复制
     if (SAFE_SINKS.has(target)) continue;
-    if (!underRoots(expandPath(target, ctx), ctx)) verdict = "ask";
+    const p = expandPath(target, ctx);
+    if (p === null || !underRoots(p, ctx)) verdict = "ask";
   }
   return { verdict, skip };
 }
 
-/** 单段判定：危险 > 重定向 > 路径越界 > 只读名单。 */
-function assessSegment(tokens: string[], ctx: Ctx): LocalVerdict {
+/** 单段判定：危险 > 重定向 > 路径越界 > 壳 -c 递归 > 只读名单。 */
+function assessSegment(tokens: string[], ctx: Ctx, depth: number): LocalVerdict {
   const words = stripAssignments(tokens);
   if (words.length === 0) return "allow";
   const cmd = path.basename(words[0]!);
@@ -435,10 +483,51 @@ function assessSegment(tokens: string[], ctx: Ctx): LocalVerdict {
     if (redirect.skip.has(i)) continue;
     const w = words[i]!;
     if (!looksLikePath(w)) continue;
-    if (!underRoots(expandPath(w, ctx), ctx)) return "ask";
+    const p = expandPath(w, ctx);
+    if (p === null || !underRoots(p, ctx)) return "ask";
+  }
+
+  if (SHELLS.has(cmd)) {
+    // 壳之 -c 值即完整命令行：递归再判（深限 MAX_SHELL_DEPTH）；不可判者 pass，绝不 allow
+    const script = shellScriptOf(words);
+    if (script === null || depth >= MAX_SHELL_DEPTH) return "pass";
+    return assessCommand(script, ctx, depth + 1);
   }
 
   return isReadOnly(cmd, words) ? "allow" : "pass";
+}
+
+/**
+ * 自 shell 段取 -c 之脚本：形如「-c script」「-cscript」「-lc script」。
+ * 无 -c 或无值 → null（调用方视作普通 shell 命令，pass）。
+ */
+function shellScriptOf(words: string[]): string | null {
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i]!;
+    if (!w.startsWith("-") || w.startsWith("--")) continue;
+    const idx = w.indexOf("c");
+    if (idx < 1) continue;
+    const rest = w.slice(idx + 1);
+    return rest !== "" ? rest : (words[i + 1] ?? null);
+  }
+  return null;
+}
+
+/** 整条命令之判定：切段 → 取回即喂壳之拦截 → 逐段判。任段 ask 即 ask，否则任段 pass 即 pass。 */
+function assessCommand(command: string, ctx: Ctx, depth: number): LocalVerdict {
+  const segs = splitShellSegments(command)
+    .map(tokenizeSegment)
+    .filter((t) => t.length > 0);
+  if (segs.length === 0) return "pass";
+  const cmds = segs.map((t) => path.basename(stripAssignments(t)[0] ?? ""));
+  // 取回即喂壳（curl|sh、wget|bash）：典型投放执行
+  for (let i = 0; i < cmds.length; i++) {
+    if (!SHELLS.has(cmds[i]!)) continue;
+    for (let j = 0; j < i; j++) if (FETCHERS.has(cmds[j]!)) return "ask";
+  }
+  const verdicts = segs.map((t) => assessSegment(t, ctx, depth));
+  if (verdicts.includes("ask")) return "ask";
+  return verdicts.includes("pass") ? "pass" : "allow";
 }
 
 /** 秘密路径：任何时候写之皆须人审（纵在 home 内）。 */
@@ -484,19 +573,7 @@ export function assessLocally(args: {
   if (name === "bash") {
     const command = typeof input.command === "string" ? input.command : "";
     if (command.trim() === "") return "pass";
-    const segs = splitShellSegments(command)
-      .map(tokenizeSegment)
-      .filter((t) => t.length > 0);
-    if (segs.length === 0) return "pass";
-    const cmds = segs.map((t) => path.basename(stripAssignments(t)[0] ?? ""));
-    // 取回即喂壳（curl|sh、wget|bash）：典型投放执行
-    for (let i = 0; i < cmds.length; i++) {
-      if (!SHELLS.has(cmds[i]!)) continue;
-      for (let j = 0; j < i; j++) if (FETCHERS.has(cmds[j]!)) return "ask";
-    }
-    const verdicts = segs.map((t) => assessSegment(t, ctx));
-    if (verdicts.includes("ask")) return "ask";
-    return verdicts.includes("pass") ? "pass" : "allow";
+    return assessCommand(command, ctx, 0);
   }
 
   if (WRITE_TOOLS.has(name)) {
@@ -508,7 +585,7 @@ export function assessLocally(args: {
           : undefined;
     if (filePath === undefined || filePath === "") return "pass";
     const p = expandPath(filePath, ctx);
-    if (isSensitivePath(p, ctx)) return "ask";
+    if (p === null || isSensitivePath(p, ctx)) return "ask";
     return underRoots(p, ctx) ? "allow" : "ask";
   }
 
@@ -525,7 +602,8 @@ export type Decision = "allow" | "ask" | "deny" | "silent";
  * 决断矩阵：
  *  本地 allow/ask 直接采用；本地 pass 则看模型概率——
  *  risk 达 denyScore → destructiveAction；达 askScore → ask；approval 达 askP → ask；余者 allow。
- *  概率缺失/非有限：risk 缺而 approval 亦不触发 → silent；宁放宿主弹窗，绝不据半份证据放行。
+ *  risk 与 approval **须俱为有限数**方出决断：任一缺失/非有限即 silent（宁放宿主弹窗，
+ *  绝不据半份证据放行——半份常是响应截断或解析坏之征兆）。
  */
 export function decidePermission(args: {
   local: LocalVerdict;
@@ -538,21 +616,27 @@ export function decidePermission(args: {
   if (local === "ask") return "ask";
   const risk = args.riskMean;
   const approval = args.approvalP;
-  if (isFiniteNumber(risk)) {
-    if (risk >= cfg.risk.denyScore) return cfg.destructiveAction;
-    if (risk >= cfg.risk.askScore) return "ask";
-  }
-  if (isFiniteNumber(approval) && approval >= cfg.approval.askP) return "ask";
-  return isFiniteNumber(risk) ? "allow" : "silent";
+  if (!isFiniteNumber(risk) || !isFiniteNumber(approval)) return "silent";
+  if (risk >= cfg.risk.denyScore) return cfg.destructiveAction;
+  if (risk >= cfg.risk.askScore) return "ask";
+  if (approval >= cfg.approval.askP) return "ask";
+  return "allow";
 }
 
 // ── 审计 ──
 
-/** 秘密遮蔽：API key 与长 bearer token 不得入审计档。 */
+/**
+ * 秘密遮蔽：API key、bearer token 与 Authorization 头之值不得入审计档。
+ * bearer 下界取 12 字（16 起则 12–15 字之 token 漏网）；Authorization 头之值不论长短整段遮蔽。
+ */
 function maskSecrets(text: string): string {
   return text
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-***")
-    .replace(/(bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi, "$1***")
+    .replace(
+      /(\bauthorization\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s"',;]+(?:\s+[^\s"',;]+)?)/gi,
+      "$1***"
+    )
+    .replace(/(bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1***")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -612,19 +696,41 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(out + "$");
 }
 
+/** 归一命令文本：去首尾空白、去前导 VAR=value 赋值。 */
+function normalizeCommandText(text: string): string {
+  let s = text.trim();
+  for (;;) {
+    const next = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, "");
+    if (next === s) return s;
+    s = next.trim();
+  }
+}
+
+/** 命令之候选形：整条（归一后）与按 shell 运算符切段（各归一后）——复合命令须逐段比。 */
+function bashCandidates(command: string): string[] {
+  const out = new Set<string>();
+  const whole = normalizeCommandText(command);
+  if (whole !== "") out.add(whole);
+  for (const seg of splitShellSegments(command)) {
+    const n = normalizeCommandText(seg);
+    if (n !== "") out.add(n);
+  }
+  return [...out];
+}
+
 function matchBashRule(pattern: string, command: string): boolean {
-  if (pattern.endsWith(":*")) return command.startsWith(pattern.slice(0, -2));
-  if (pattern.includes("*") || pattern.includes("?")) return globToRegExp(pattern).test(command);
-  return command === pattern;
+  const matches = (c: string): boolean => {
+    if (pattern.endsWith(":*")) return c.startsWith(pattern.slice(0, -2));
+    if (pattern.includes("*") || pattern.includes("?")) return globToRegExp(pattern).test(c);
+    return c === pattern;
+  };
+  return bashCandidates(command).some(matches);
 }
 
 function matchPathRule(pattern: string, rawPath: string, ctx: Ctx): boolean {
-  const candidates = new Set<string>([rawPath]);
-  try {
-    candidates.add(expandPath(rawPath, ctx));
-  } catch {
-    /* 绝对化失败：只比原文 */
-  }
+  const abs = expandPath(rawPath, ctx);
+  if (abs === null) return true; // ~user 等：静态不可判，保守视为命中
+  const candidates = new Set<string>([rawPath, abs]);
   const re = globToRegExp(pattern);
   for (const c of candidates) {
     if (c === pattern || re.test(c)) return true;
@@ -634,8 +740,9 @@ function matchPathRule(pattern: string, rawPath: string, ctx: Ctx): boolean {
 
 /**
  * 是否命中宿主 deny 规则。规则解析：「Tool(arg)」或「Tool」；Tool 名大小写不敏感。
- * Bash 之 arg 支持「前缀:*」与通配；Write/Edit/MultiEdit 之 arg 按路径通配
- *（原文与绝对化形皆比）。规则无法解析者跳过；工具同名而无参数者视为全匹配（宁沉默，勿越权放行）。
+ * Bash 之 arg 支持「前缀:*」与通配，比之于归一后之整条命令与各切段（去空白、去 VAR=value 前缀）；
+ * Write/Edit/MultiEdit 之 arg 按路径通配（原文与绝对化形皆比）。工具同名而无参数者视为全匹配；
+ * 字符串而形不可解析者亦视为命中——本门唯沉默，宿主照旧弹窗，宁过勿漏（宁沉默，勿越权放行）。
  */
 export function denyRulesMatch(
   tool: string,
@@ -656,7 +763,7 @@ export function denyRulesMatch(
   for (const rule of denyRules) {
     if (typeof rule !== "string") continue;
     const m = /^\s*([A-Za-z0-9_.:-]+)\s*(?:\((.*)\))?\s*$/.exec(rule);
-    if (!m) continue;
+    if (!m) return true; // 形不可解析：保守视为命中（本门沉默，宿主照旧弹窗）
     if (m[1]!.toLowerCase() !== name) continue;
     const arg = m[2];
     if (arg === undefined) return true;
