@@ -20,7 +20,8 @@
   "bugs": "https://github.com/G0-0000/pi-subagent-jev/issues",
   "scripts": {
     "test": "node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts",
-    "prune-training": "node scripts/prune-training.ts"
+    "prune-training": "node scripts/prune-training.ts",
+    "install-codebuddy": "bash scripts/install-codebuddy.sh"
   },
   "pi": {
     "extensions": [
@@ -28,7 +29,7 @@
       "./extensions/orchestrator-main.ts"
     ],
     "skills": [
-      "./skills"
+      "./skills/pi"
     ]
   },
   "peerDependencies": {

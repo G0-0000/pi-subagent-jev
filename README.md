@@ -36,11 +36,21 @@ Rather not edit files by hand? Just ask pi to 配置 subagent 规则 — the bun
 
 ## CodeBuddy Code
 
-The same gate is available as a CodeBuddy Code plugin (manifest `.codebuddy-plugin/plugin.json`, hooks `hooks/hooks.json`, entry `bin/jev-hook`, adapter `cb/`):
+The same gate is available as a CodeBuddy Code plugin (manifest `.codebuddy-plugin/plugin.json`, hooks `hooks/hooks.json`, entry `bin/jev-hook`, adapter `cb/`). For a persistent install (validates, adds, enables, and snapshots the repo into the plugin cache — re-runnable after edits):
+
+```
+bash scripts/install-codebuddy.sh
+```
+
+The script installs at **project scope by default** — enabled for this repository only. Set `JEV_PLUGIN_SCOPE=user` before running it to install for all projects instead. Because project scope binds to the current working directory, the script `cd`s to the repo root before calling `codebuddy`. The local plugin enablement lives in `.codebuddy/`, which is git-ignored (local-only state).
+
+For dev/test against the working tree, load it directly without installing:
 
 ```
 codebuddy --plugin-dir /path/to/pi-subagent-jev
 ```
+
+The plugin bundles the `subagent-jev` skill (`skills/codebuddy/`) — run `/reload-plugins` in CodeBuddy (or restart) to apply it. The skill walks you through rule setup — just say 配置 subagent 规则; it probes the endpoint and tests rules via `scripts/try-rules.ts`.
 
 Dispatch tools `Task`/`Agent` are checked at `PreToolUse` (deny on violation); in `warn` mode the notice is delivered as `additionalContext` at `PostToolUse`. Rules and the upstream chain remain single-source at `~/.pi/agent/jev-comp` (override the directory with `JEV_CONFIG_DIR`). Selfhost transport only — no builtin classifier, thinking-depth adjustment, or runtime monitoring. Details: [docs/codebuddy.md](docs/codebuddy.md).
 
@@ -53,6 +63,8 @@ claude --plugin-dir /path/to/pi-subagent-jev
 ```
 
 The canonical dispatch tool is `Agent` (v2.1.63); `Task` is kept as an alias, and the hook matcher accepts both.
+
+A bundled `subagent-jev` skill (`skills/claude/`) covers rule setup the same way — say 配置 subagent 规则; probe and rule testing use `scripts/try-rules.ts`.
 
 Rules and the upstream chain remain single-source at `~/.pi/agent/jev-comp` (override the directory with `JEV_CONFIG_DIR`). Selfhost transport only — no builtin classifier, thinking-depth adjustment, runtime monitoring, or `jev_ask`. **End-to-end validation on a real Claude Code CLI has not been performed** (no CLI available at implementation time); the adapter follows the documented hook protocol and is covered by unit tests only. Details: [docs/claude-code.md](docs/claude-code.md).
 

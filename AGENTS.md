@@ -64,13 +64,16 @@ pi-subagent-jev/
 │   └── codebuddy.md
 ├── scripts/
 │   ├── calibrate.ts           # 阈值校准脚本（发真实请求，不进测试）
+│   ├── try-rules.ts           # 规则试跑器／连通探针（离线试规则，--probe 验连通）
 │   └── calibration-20260925.jsonl
 ├── examples/
 │   ├── compliance-rules.sample.json
 │   ├── upstreams.sample.json
 │   └── monitor.sample.json
 ├── skills/
-│   └── subagent-jev/SKILL.md
+│   ├── pi/subagent-jev/       # pi 版（SKILL.md ＋ references/calibration.md）
+│   ├── codebuddy/subagent-jev/SKILL.md
+│   └── claude/subagent-jev/SKILL.md
 ├── README.md
 ├── AGENTS.md
 ├── CONTEXT.md                 # 术语表（Upstream / Failover / Cooldown / 全局规则 _all / 问句自含 / Warn 模式）
@@ -115,6 +118,7 @@ pi-subagent-jev/
 - 形态：插件根即仓库根；清单 .codebuddy-plugin/plugin.json，钩子 hooks/hooks.json，入口 bin/jev-hook（argv[2] = pre | post），适配逻辑 cb/。
 - 双宿主共用：hooks/hooks.json 与 bin/jev-hook 由 CodeBuddy Code 与 Claude Code 共用，钩子命令取 `${CLAUDE_PLUGIN_ROOT}/bin/jev-hook`（CodeBuddy ≥2.172.1 与 Claude Code 皆替换或注入该变量），Claude 侧清单另为 .claude-plugin/plugin.json；真实 Claude Code CLI 端到端验证尚待补。
 - 安装：codebuddy --plugin-dir ~/pi-subagent-jev；开发期可用 /reload-plugins 重载。
+- Skill 分宿主：`skills/pi`、`skills/codebuddy`、`skills/claude` 各藏一份 `subagent-jev/SKILL.md`，三宿主各扫其径（清单分别指 `./skills/pi`、`./skills/codebuddy`、`./skills/claude`），互不相泄；CodeBuddy/Claude 版以 `scripts/try-rules.ts` 探针试规则，pi 版另带 `references/calibration.md`。
 - 配置：与 pi 侧同源，缺省 ~/.pi/agent/jev-comp（JEV_CONFIG_DIR 可覆写）；钩子为独立进程、每次触发重读，改档无须 /reload。
 - 语义：block 命中输出 hookSpecificOutput.permissionDecision="deny" 与同文 reason；warn 命中以 tool_use_id（缺则 call_id）落盘，PostToolUse 取回并附 additionalContext；审计行另有 host:"codebuddy"。
 - 限制：唯 selfhost 传输；无思考深度调整、无运行监控、无 jev_ask（后续经 MCP 补）；JEV_CONFIG_DIR 不覆写 env 档与 training.jsonl。
@@ -123,6 +127,7 @@ pi-subagent-jev/
 ## 部署
 - 本机安装命令：`pi install ~/pi-subagent-jev`（local source，直指项目目录）；实际注册于 `~/.pi/agent/settings.json` 之 `packages` 项（登记为相对路径 `"../../pi-subagent-jev"`，`pi list` 可见）
 - 改码后在 pi 内 `/reload` 生效
+- CodeBuddy 持久安装用 `scripts/install-codebuddy.sh`（plugin validate + add + enable，含 subagent-jev skill；快照入 `~/.codebuddy/plugins/cache`，改码后重跑），**缺省项目范围（project scope，仅对本仓库生效；`JEV_PLUGIN_SCOPE=user` 可改用户范围）**，本地启用态 `.codebuddy/` 已入 `.gitignore`；`--plugin-dir` 唯开发期用
 
 ## 注释与提交
 - 注释与 commit message 用简体中文；代码标识符、错误信息保持原文（英文 instructions、错误 kind 等照旧）

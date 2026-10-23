@@ -24,6 +24,17 @@ claude --plugin-dir /path/to/pi-subagent-jev
 
 钩子乃独立进程、每次触发重读配置，改档无须重载。环境变量同 pi 侧（见 `docs/codebuddy.md`）。
 
+## Skill
+
+插件附带 `subagent-jev` 技能（`skills/claude/subagent-jev/SKILL.md`）：对 Claude Code 言「配置 subagent 规则」或「subagent-jev」即加载，引导建 env 档、写规则档与试规则。配置与 pi 侧同源（`~/.pi/agent/jev-comp`，`JEV_CONFIG_DIR` 可覆写），唯本宿主无 `jev_ask`，探针与规则试测改走脚本：
+
+```
+node ${CLAUDE_PLUGIN_ROOT}/scripts/try-rules.ts --probe
+node ${CLAUDE_PLUGIN_ROOT}/scripts/try-rules.ts <agent> "<task>"
+```
+
+`--probe` 验端点、key 与模型三通（`--upstream <名>` 可直发单一上游）；agent 形逐问打印概率、阈值、向性、命中、verdict 与拦截文案，缺省干跑、不写运行时档（`--audit` 方追加一行审计）。规则改档即生效（钩子每次新起进程）；插件装卸、重装或升级经 `/plugin` 管理或重启 CLI。
+
 ## 已知限制
 
 - **唯 selfhost 传输**：`_global.transport: "builtin"` 被忽略，仍走自管 curl 链。

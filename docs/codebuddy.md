@@ -5,6 +5,23 @@
 
 ## 安装
 
+持久安装（校验、加入、启用；幂等可重跑）：
+
+```
+bash scripts/install-codebuddy.sh
+```
+
+脚本**缺省以项目范围（project scope）安装**——插件唯对本仓库生效。欲对所有项目生效，运行前设
+`JEV_PLUGIN_SCOPE=user` 即可。因项目范围绑定当前工作目录，脚本先 `cd` 到仓库根再执行 codebuddy 命令，
+故在任意目录下调用本脚本皆可。安装后本地启用态落于 `.codebuddy/`，该目录已入 `.gitignore`，
+属本地状态、不入库。
+
+脚本将仓库快照入 `~/.codebuddy/plugins/cache`——编辑仓库后须**重跑本脚本**方使快照更新，
+再于 CodeBuddy 内执行 `/reload-plugins`（或重启）生效。插件附赠 `subagent-jev` skill
+（`skills/codebuddy/subagent-jev/SKILL.md`），随安装一并入快照。
+
+开发/测试期直载工作区（不入插件缓存）：
+
 ```
 codebuddy --plugin-dir /path/to/pi-subagent-jev
 ```
@@ -30,6 +47,17 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
 
 `JEV_CONFIG_DIR` 可覆写配置目录（测试、多实例或独立规则集用）；未设或空白时回缺省。
 钩子乃独立进程、每次触发重读配置，故改档**无须** `/reload`，下次派单即生效。
+
+## Skill
+
+插件附带 `subagent-jev` 技能（`skills/codebuddy/subagent-jev/SKILL.md`）：对 CodeBuddy 言「配置 subagent 规则」或「subagent-jev」即加载，引导建 env 档、写规则档与试规则。配置与 pi 侧同源（`~/.pi/agent/jev-comp`），唯本宿主无 `jev_ask`，探针与规则试测改走脚本：
+
+```
+node ${CODEBUDDY_PLUGIN_ROOT}/scripts/try-rules.ts --probe
+node ${CODEBUDDY_PLUGIN_ROOT}/scripts/try-rules.ts <agent> "<task>"
+```
+
+`--probe` 验端点、key 与模型三通（`--upstream <名>` 可直发单一上游）；agent 形逐问打印概率、阈值、向性、命中、verdict 与拦截文案，缺省干跑、不写运行时档（`--audit` 方追加一行审计）。规则改档即生效（钩子每次新起进程）；插件本体重装或升级后方须 `/reload-plugins`。
 
 ## 环境变量
 

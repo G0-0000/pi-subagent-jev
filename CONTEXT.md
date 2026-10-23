@@ -21,4 +21,4 @@
 ## 文档分工
 
 - **README** — 用户亲读之文档：安装指引、完整字段语义、audit 字段、mode/transport/failover 诸节之权威所在；面向开源用户，英中双语（英在前）。schema 之唯一权威，他处不复述。
-- **Skill（`skills/subagent-jev/`）** — agent 读之配置向导：用户初装插件或改配时加载，司初始化／格式说明／配置规则／注意事项四模块；正文唯作向导与指针（缩略步骤＋链 README 与 examples 模板），不预设用户之 subagent 班子（不遣特定 agent），重料下沉 `references/`。
+- **Skill（`skills/pi/subagent-jev/`；CodeBuddy/Claude 之变体另在 `skills/codebuddy/`、`skills/claude/`）** — agent 读之配置向导：用户初装插件或改配时加载，司初始化／格式说明／配置规则／注意事项四模块；正文唯作向导与指针（缩略步骤＋链 README 与 examples 模板），不预设用户之 subagent 班子（不遣特定 agent），重料下沉 `references/`（唯 pi 版有之）。
