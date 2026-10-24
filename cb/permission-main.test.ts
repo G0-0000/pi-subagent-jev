@@ -489,5 +489,3 @@ test("㉒ Claude Code + host-prompt：本地 pass 即问模型（CodeBuddy 正�
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-
