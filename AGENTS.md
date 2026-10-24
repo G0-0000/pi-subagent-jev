@@ -64,7 +64,8 @@ pi-subagent-jev/
 │   └── monitor-store.test.ts
 ├── docs/
 │   ├── adr/                     # 0001-upstream-failover.md、0002-global-rules-and-config-only.md、0003-self-contained-questions.md、0004-warn-advisory-mode.md、0005-runtime-monitoring.md
-│   └── codebuddy.md
+│   ├── codebuddy.md
+│   └── reference.md           # 完整技术参考（旧 README 迁入；速览见根 README / README.zh-CN.md）
 ├── scripts/
 │   ├── calibrate.ts           # 阈值校准脚本（发真实请求，不进测试）
 │   ├── try-rules.ts           # 规则试跑器／连通探针（离线试规则，--probe 验连通）
@@ -77,7 +78,8 @@ pi-subagent-jev/
 │   ├── pi/subagent-jev/       # pi 版（SKILL.md ＋ references/calibration.md）
 │   ├── codebuddy/subagent-jev/SKILL.md
 │   └── claude/subagent-jev/SKILL.md
-├── README.md
+├── README.md                  # 速览（英文）
+├── README.zh-CN.md            # 速览（简体中文）
 ├── AGENTS.md
 ├── CONTEXT.md                 # 术语表（Upstream / Failover / Cooldown / 全局规则 _all / 问句自含 / Warn 模式）
 ├── LICENSE

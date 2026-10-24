@@ -5,14 +5,14 @@ description: 为 Claude Code 之 subagent 配制 JEV 派单合规规则之用。
 
 # subagent-jev — JEV 合规规则配置向导（Claude Code）
 
-本 skill 于用户初装 Claude Code 插件或后续改配时加载，司四事：初始化、释配置档格式、定规则、示注意事项。红线三条贯穿全程：apiKey 之值不入任何档/日志/错误文本；POST 不自动重试；任何错误 fail-open。完整文档以 README 与 `docs/claude-code.md` 为权威，本档唯作向导，不复述全文。**须知**：本宿主适配复用 CodeBuddy Code 之适配层，尚缺真实 Claude Code CLI 之端到端验证——首次实机使用宜真派一单，察钩子是否如期触发。
+本 skill 于用户初装 Claude Code 插件或后续改配时加载，司四事：初始化、释配置档格式、定规则、示注意事项。红线三条贯穿全程：apiKey 之值不入任何档/日志/错误文本；POST 不自动重试；任何错误 fail-open。完整文档以 `docs/reference.md` 与 `docs/claude-code.md` 为权威，本档唯作向导，不复述全文。**须知**：本宿主适配复用 CodeBuddy Code 之适配层，尚缺真实 Claude Code CLI 之端到端验证——首次实机使用宜真派一单，察钩子是否如期触发。
 
 ## 一、初始化
 
 起手势：查 `~/.pi/agent/jev-comp/compliance-rules.json`（`JEV_CONFIG_DIR` 另指者从其径）之有无。**有** → 已初始化，径问用户「为哪个 subagent 配规则？」入第三模块。**无** → 依次行下四步：
 
 1. **装插件**——`claude --plugin-dir ~/pi-subagent-jev`；插件之装卸/更新经 `/plugin` 管理，或重启 Claude Code。派单拦截钩 `Agent` 工具（PreToolUse 审核、PostToolUse 交付 warn 提示）；`Agent` 为正名（v2.1.63 起），`Task` 存为别名，钩子二者皆认。
-2. **配模型**——唯 selfhost 自管端点（本宿主无 builtin 传输）：建 env 档 `~/.config/jev-comp/env`（权限 600），三键 `JEV_AI_API_KEY`（**嘱用户亲笔自填**，agent 全程不经手其值）／`JEV_AI_BASE_URL`（必配）／`JEV_AI_MODEL`（可选）。详见 README「Install」与「Transport」节。
+2. **配模型**——唯 selfhost 自管端点（本宿主无 builtin 传输）：建 env 档 `~/.config/jev-comp/env`（权限 600），三键 `JEV_AI_API_KEY`（**嘱用户亲笔自填**，agent 全程不经手其值）／`JEV_AI_BASE_URL`（必配）／`JEV_AI_MODEL`（可选）。详见 `docs/reference.md`「Install」与「Transport」节。
 3. **试连通**——`node ${CLAUDE_PLUGIN_ROOT}/scripts/try-rules.ts --probe`（插件根变量未注入者，以插件目录实路径代之）：探针每上游至多一发（有 failover 链者按链逐级，配 `--upstream <名>` 则只直发该上游一发，绕链序与冷却），验端点、key、模型三者俱通，并报耗时。报错先排查配置，勿续。
 4. **生效**——规则档改毕即生效，无须重载（钩子为独立进程、每次派单重读配置）；唯插件本体重装/升级后须 `/plugin` 重载或重启 Claude Code。
 
@@ -29,7 +29,7 @@ description: 为 Claude Code 之 subagent 配制 JEV 派单合规规则之用。
 - 向性：`below`＝概率低于阈则拦（正例，求达标有据）；`above`＝概率高于阈则拦（反例，求犯忌有凭）
 - 本宿主忽略 `_global.transport`（恒 selfhost）与 `_global.thinkingDepth`；亦无 `monitor.json` 运行监控
 
-**配置模板**：`examples/compliance-rules.sample.json`（仅示 schema，非部署之源）。完整字段语义、audit 字段、mode/failover 诸节悉见 README 对应章节——彼为权威，本档不复述。
+**配置模板**：`examples/compliance-rules.sample.json`（仅示 schema，非部署之源）。完整字段语义、audit 字段、mode/failover 诸节悉见 `docs/reference.md` 对应章节——彼为权威，本档不复述。
 
 ## 三、配置规则
 

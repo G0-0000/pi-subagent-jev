@@ -5,7 +5,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 
 # subagent-jev — JEV 合规规则配置向导
 
-本 skill 于用户初装插件或后续改配时加载，司四事：初始化、释配置档格式、定规则、示注意事项。红线三条贯穿全程：apiKey 之值不入任何档/日志/错误文本；POST 不自动重试；任何错误 fail-open。完整文档以 README 为权威，本档唯作向导，不复述全文。
+本 skill 于用户初装插件或后续改配时加载，司四事：初始化、释配置档格式、定规则、示注意事项。红线三条贯穿全程：apiKey 之值不入任何档/日志/错误文本；POST 不自动重试；任何错误 fail-open。完整文档以 `docs/reference.md` 为权威，本档唯作向导，不复述全文。
 
 ## 一、初始化
 
@@ -15,13 +15,13 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 2. **配模型**——二选一：
    - 插件自管端点：建 env 档 `~/.config/jev-comp/env`（权限 600），三键 `JEV_AI_API_KEY`（**嘱用户亲笔自填**，agent 全程不经手其值）／`JEV_AI_BASE_URL`（必配）／`JEV_AI_MODEL`（可选）；
    - 走 pi 内建 classifier（须 pi ≥ 0.99）：凭据 pi 代管、插件零 key，链路于规则档 `_global.builtinChain` 配置。
-   详见 README「Install」与「Transport: selfhost vs builtin」节。
+   详见 `docs/reference.md`「Install」与「Transport: selfhost vs builtin」节。
 3. **试连通**——空参直唤 `jev_ask` 即可：state/questions 不填，内建探针载荷自代；返得概率即端点、key、模型三俱通，结果附 `ms` 耗时，端点快慢立见。有 `upstreams.json` 者，唯传 `upstream:"<名>"` 即单发直测该上游（bypass 链序与冷却，唯自管链；builtin 链此参被忽略），逐枚快测宜排快慢。报错先排查配置，勿续。
 4. **生效**——于 pi 内 `/reload`。
 
-（可选：多上游 failover 档 `~/.pi/agent/jev-comp/upstreams.json` 聚多枚 key，宜用户手书，本 skill 不代写。样例见 `examples/upstreams.sample.json`，详见 README「多上游 failover」节。）
+（可选：多上游 failover 档 `~/.pi/agent/jev-comp/upstreams.json` 聚多枚 key，宜用户手书，本 skill 不代写。样例见 `examples/upstreams.sample.json`，详见 `docs/reference.md`「多上游 failover」节。）
 
-（可选：运行监控档 `~/.pi/agent/jev-comp/monitor.json`（v0.12.0）——观察运行中子 agent 之疑似 bash 停滞／无效工具循环／无变化重复失败，命中唯向主会话注提醒、绝不处置。默认关闭：用户明言要开监控方代写此档（`enabled: true` 起，余键可省、逐字段回退缺省），样例见 `examples/monitor.sample.json`；监控问句 M001–M004 为内建常量，**不入** compliance-rules.json。详见 README「运行监控」节。）
+（可选：运行监控档 `~/.pi/agent/jev-comp/monitor.json`（v0.12.0）——观察运行中子 agent 之疑似 bash 停滞／无效工具循环／无变化重复失败，命中唯向主会话注提醒、绝不处置。默认关闭：用户明言要开监控方代写此档（`enabled: true` 起，余键可省、逐字段回退缺省），样例见 `examples/monitor.sample.json`；监控问句 M001–M004 为内建常量，**不入** compliance-rules.json。详见 `docs/reference.md`「运行监控」节。）
 
 ## 二、配置文件格式说明
 
@@ -33,7 +33,7 @@ description: 为 subagent 配制 JEV 派单合规规则之用。当用户要为�
 - `_all`：形同组而无 `agentDesc`，所列编号凡派单皆查（含无专属组之 agent），与组引并集去重、全局在前
 - 向性：`below`＝概率低于阈则拦（正例，求达标有据）；`above`＝概率高于阈则拦（反例，求犯忌有凭）
 
-**配置模板**：`examples/compliance-rules.sample.json`（仅示 schema，非部署之源）。完整字段语义、audit 字段、mode/transport/failover 诸节悉见 README 对应章节——彼为权威，本档不复述。
+**配置模板**：`examples/compliance-rules.sample.json`（仅示 schema，非部署之源）。完整字段语义、audit 字段、mode/transport/failover 诸节悉见 `docs/reference.md` 对应章节——彼为权威，本档不复述。
 
 ## 三、配置规则
 
