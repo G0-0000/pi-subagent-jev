@@ -10,7 +10,7 @@ JEV System One 子 agent 派单合规门，支持 **CodeBuddy Code**、**Claude 
 ## 功能
 
 - **派单审核**——按可配置的 JEV 问句审查每次 subagent 任务；命中即拦截并列出原因，亦可切 `warn` 模式只提醒。
-- **CodeBuddy Code 权限门（可选）**——以本地确定性判定＋ JEV risk/approval 两问，自动放行、询问或拒绝 Bash / Write / Edit / MultiEdit。
+- **工具权限门（可选，CodeBuddy Code 与 Claude Code）**——以本地确定性判定＋ JEV risk/approval 两问，自动放行、询问或拒绝 Bash / Write / Edit / MultiEdit。
 - **内置配置 skill**——装好后让 agent 代配，无须手写规则。
 - **安全默认**——规则存于仓外，凭据不入日志，任何错误 fail-open。
 - **pi 专属**——`jev_ask`、思考深度调整与运行监控仍仅在 pi 包中提供。
@@ -58,10 +58,30 @@ JEV_AI_MODEL=optional
 
 无规则档即零检查，派单照常放行。
 
+## 工具权限门（可选）
+
+CodeBuddy Code 与 Claude Code 还可于 **Bash / Write / Edit / MultiEdit** 执行前审核。**默认关闭。**
+
+创建 `~/.pi/agent/jev-comp/auto-approve.json`（或 `JEV_CONFIG_DIR` 下同名档）：
+
+```json
+{
+  "enabled": true,
+  "mode": "observe",
+  "tools": ["Bash", "Write", "Edit", "MultiEdit"]
+}
+```
+
+先以 `mode: "observe"` 只写 `audit.jsonl`（`kind: "permission"`）；查看判定合意后，再改 `"auto"`，方输出 `allow` / `ask` / `deny`。宿主 `permissions.deny` 与 `permissions.ask` 恒优先；任何错误皆交还宿主。
+
+Claude Code 之 `host-prompt` 现对每个本地无定论调用皆问 JEV（其弹窗正则原为 CodeBuddy 专用）。详见 [Claude 说明](docs/claude-code.md)。
+
+样例：[examples/auto-approve.sample.json](examples/auto-approve.sample.json)。
+
 ## 使用
 
 - 正常派发 subagent 任务；命中规则即拦截，`warn` 模式则仅附提醒。
-- CodeBuddy 权限自动审批默认关闭，须在 `~/.pi/agent/jev-comp/auto-approve.json` 启用。
+- CodeBuddy Code / Claude Code 之工具权限门另审 Bash / Write / Edit / MultiEdit；见上节「工具权限门」。
 - pi 专属工具与进阶模式见完整参考。
 
 ## 文档

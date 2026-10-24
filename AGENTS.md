@@ -95,9 +95,9 @@ pi-subagent-jev/
 
 治运行中子 agent，与派单审核（派前）互不干扰，信号面亦不相交（彼钩 `tool_call`，此订 `subagent:control-event` ＋ RPC status）。**默认关闭**——唯 `~/.pi/agent/jev-comp/monitor.json` 存在、可解析且 `enabled:true` 方启用（坏档静默不启用，fail-open；仓内 `examples/monitor.sample.json` 仅示 schema）。配置键：`bashFirstCheckMs`（300000，bash 启动后首查总耗时阈值）／`bashRecheckMs`（600000，检查后复询间隔）／`sweepIntervalMs`（600000，兜底巡检：最近未获任何检查满此时长）／`maxCallsPerEval`（6）／`maxCharsPerCall`（800）／`maxStateChars`（8000），非法值逐字段回退缺省。三检测器＋兜底：bash 停滞／无效工具循环／无变化重复失败／无进展巡检；问句为内建常量 M001–M004（英文 instructions＋criteria，阈值 0.6/0.7/0.7/0.6，below/above/above/below），**不经 compliance-rules.json**。触发两线：事件线（`tool_failures` 与缓冲候选检测，信号＋窗口去重）＋时长线（30s tick 驱动 `dueChecks`，同 tick 每 run 合并一次求值；bash 检查「成败皆记」，证据有无皆转复询节奏）。命中以 `pi.sendMessage({triggerTurn:true})` 注入主会话，文案规则触发式（agent＋检测器＋证据节录＋置信度＋核查建议）；**仅提醒，绝不处置**。证据取公开接口（控制事件＋RPC `status` view transcript，前台 fleet 形／异步缩进文本形双解析），不读私有 transcript、不改 pi-subagents；证据不足→`unknown` 不告警。**监控唯主会话武装**（`PI_SUBAGENT_CHILD=1` 加载时即拒，前台/fork 子会话经 `session_start` 档径判别后 disarm；判别异常 fail-safe 向不武装）。**异步子之 bash 最早 240 秒方得见**（首个控制事件 `tool_open_threshold`/`time_threshold`，事件不重发）；异步形无错误标记可凭，M003 于异步恒不命中（弱证据之限）。求值复用 `ask()`（failover 链、每级一发、全链败 fail-open）；trainingLog 开时落 `source:"monitor"` 训练行。决策见 `docs/adr/0005-runtime-monitoring.md`。
 
-## 工具权限自动审批门（CodeBuddy 侧，opt-in）
+## 工具权限自动审批门（CodeBuddy Code / Claude Code，opt-in）
 
-治「每个写/执行类工具都须人确认一遍」之烦：CodeBuddy 之 PreToolUse 钩子（matcher
+治「每个写/执行类工具都须人确认一遍」之烦：两宿主共用此 PreToolUse 钩子（matcher
 `^(Bash|Write|Edit|MultiEdit)$`，入口 `bin/jev-hook perm`，超时 8s）先作本地确定性判定，无定论者
 再问 JEV 之 risk（四档打分）与 approval 两问。**默认关闭**——唯 `<configDir>/auto-approve.json`
 存在且 `enabled:true` 方启用（缺档/坏档即关，fail-open）。配置键：`mode`（observe|auto，缺省 observe）、
@@ -105,8 +105,10 @@ pi-subagent-jev/
 （1.5/2.5，0..3）、`approval.askP`（0.75）、`destructiveAction`（ask|deny，缺省 ask）、
 `jevWhen`（host-prompt|always，缺省 host-prompt）；坏值逐字段回缺省。
 
-三层判定，序不可易：**① 宿主 `permissions.deny` 命中即沉默**（`~/.codebuddy/settings.json` 与
-`<cwd>/.codebuddy/settings.json`；钩子之 allow 先于宿主权限规则、可越过 deny，故不可越权；Bash 规则
+三层判定，序不可易：**① 宿主 `permissions.deny`／`permissions.ask` 命中即沉默**。CodeBuddy 读
+`~/.codebuddy/settings.json` 与 `<cwd>/.codebuddy/settings.json`；Claude Code 读
+`$CLAUDE_CONFIG_DIR/settings.json`（或 `~/.claude/settings.json`）、`.claude/settings.json`、
+`.claude/settings.local.json`。钩子之 allow 先于宿主权限规则、可越过 deny，故不可越权；Bash 规则
 比之于归一后之整条与各切段——去空白、去 `VAR=value` 前缀、按 `&& || ; |` 切段，形不可解析者亦视为
 命中，宁过勿漏）；**② 本地确定性判定**（`jev/permission.ts`：按 `&& || ; |` 与换行切段〔引号内不切〕、
 引号感知分词、命令 basename 落只读/危险名单，路径参数展开 `~` 后解析为绝对路径与 cwd/home 相较；
@@ -119,7 +121,9 @@ sort 之 `--compress-program`、fd 之 `-x/-X` 皆不认只读，`bash|sh|zsh -c
 唯于 `jevWhen:"host-prompt"`（缺省）时，模型唯问「宿主本会弹窗」者：以 `hostWouldPrompt()` 照录
 CodeBuddy 2.174.0 之命令安全检查正则（CRITICAL／HIGH 二组，SAFE 短路二条在前；先小写归一、剥重定向、按 `; & |` 切段，引号内不切、不按换行切，逐段取最危者）
 判之；Bash 不命中者、及 Write/Edit/MultiEdit 之 pass 者，一概沉默并记 `reason:"host-would-allow"`，
-零求值、零迟滞（宿主 `bypassPermissions` 下本自放行）。`always` 则凡 pass 皆问，复原旧法。`mode: observe`
+零求值、零迟滞（宿主 `bypassPermissions` 下本自放行）。`always` 则凡 pass 皆问，复原旧法。
+**Claude Code 侧**：`hostWouldPrompt` 为 CodeBuddy 专用，故 `host-prompt` 按 `always` 保守处理——
+凡本地无定论皆问 JEV；组织级托管设置未预审，依赖托管 deny/ask 时勿启 `auto`。`mode: observe`
 只落审计；`auto` 始出 allow/ask/deny。risk 与 approval 须俱为有限数方出决断，任一缺失、求值失败、
 任何异常 → 沉默（`{}`，宿主照旧弹窗），绝不据半份证据与错误放行。
 求值每级上游 `timeoutMs` 压至 2000（三级 6s < 8s）、无重试；审计落 `<configDir>/audit.jsonl`
@@ -134,7 +138,7 @@ bearer 与 `Authorization` 头之值）。`user_requested`/`from_untrusted` 与 
 3. **任何错误 fail-open** — JEV 出错、配置档出错、概率缺失或 noul 字段缺失/非有限数皆放行（后者曾为漏洞，已修复：该规则标 `unknown` 不拦），绝不阻断派发、绝不外抛。`checkDispatch` 捕获一切异常返 `verdict:"error"` 行且 violations 为空
 
 ## 测试铁律
-- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 255 条）**全绿方可提交**
+- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 259 条）**全绿方可提交**
 - 测试不发真实 JEV 端点请求：`client.test.ts` 起本地 127.0.0.1 随机端口 mock HTTP server、真发 curl；`failover.test.ts` 纯逻辑＋注入时钟；`compliance.test.ts` 注入 `askFn`；`monitor*.test.ts` 注入概率＋假时钟。`scripts/calibrate.ts` 是唯一发真实请求的脚本，不进测试
 
 ## 配置与运行时

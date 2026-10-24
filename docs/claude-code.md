@@ -19,10 +19,38 @@ claude --plugin-dir /path/to/pi-subagent-jev
 规则与上游链单一来源，缺省 `~/.pi/agent/jev-comp`（`JEV_CONFIG_DIR` 可覆写）：
 
 - `compliance-rules.json` — 规则档；`upstreams.json` — 多上游 failover 链（可选）
+- `auto-approve.json` — 工具权限门配置（可选；缺档即关，见下节）
 - `audit.jsonl` — 审计行，另有 `"host": "claude-code"` 一键（由 `CODEBUDDY_PLUGIN_ROOT`／`CLAUDE_PLUGIN_ROOT` 判别）
 - `warn/` — warn 模式暂存（TTL 3600s，容量 100 FIFO）
 
 钩子乃独立进程、每次触发重读配置，改档无须重载。环境变量同 pi 侧（见 `docs/codebuddy.md`）。
+
+## 工具权限门（可选）
+
+本宿主与 CodeBuddy Code 共用 `bin/jev-hook perm`。Claude Code 之 PreToolUse 支持
+`permissionDecision: allow | ask | deny`，故同一门可用于 Bash / Write / Edit / MultiEdit。
+
+配置档 `<configDir>/auto-approve.json`（样例 `examples/auto-approve.sample.json`）：
+
+- `enabled`：缺省 false；档缺、坏档或未开即不干预
+- `mode`：`observe` 只写审计；`auto` 方输出 allow / ask / deny
+- `tools`：缺省 Bash / Write / Edit / MultiEdit
+- 其余阈值、`destructiveAction` 语义与 [CodeBuddy 权限门](codebuddy.md) 相同
+
+**先以 observe 跑一段**，核对 `audit.jsonl` 中 `kind: "permission"` 行之 `decision` 合意后，再改 `auto`。
+本门先读宿主 `permissions.deny` 与 `permissions.ask`，命中即沉默，绝不代答；任何错误亦沉默交宿主。
+
+Claude Code 读取以下规则档：
+
+- `$CLAUDE_CONFIG_DIR/settings.json`（未设则 `~/.claude/settings.json`）
+- `.claude/settings.json`（项目共享）
+- `.claude/settings.local.json`（项目本地）
+
+Claude 侧 `jevWhen: "host-prompt"` 现按 `always` 处理——`hostWouldPrompt` 之正则照录 CodeBuddy，
+不适用于 Claude，故保守地对每个本地无定论调用询问 JEV。`always` 行为相同。
+
+**已知限制**：组织级托管设置（managed settings）未纳入预审。若依赖托管 deny / ask，暂勿启用 `auto`。
+本宿主仍未经真实 Claude Code CLI 端到端验证（见下节）。
 
 ## Skill
 

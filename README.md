@@ -10,7 +10,7 @@ JEV System One compliance gate for subagent dispatches on **CodeBuddy Code**, **
 ## Features
 
 - **Dispatch gate** — audit every subagent task against configurable JEV questions; block with reasons or keep an advisory `warn` mode.
-- **CodeBuddy Code permissions (opt-in)** — auto-approve, ask, or deny Bash / Write / Edit / MultiEdit using local checks plus JEV risk/approval questions.
+- **Tool permission gate (opt-in, CodeBuddy Code & Claude Code)** — auto-approve, ask, or deny Bash / Write / Edit / MultiEdit using local checks plus JEV risk/approval questions.
 - **Bundled setup skill** — install and configure with your agent; no hand-written rules required.
 - **Shared, safe defaults** — rules live outside the repository, credentials are never logged, and every error fails open.
 - **pi extras** — `jev_ask`, thinking-depth adjustment, and runtime monitoring remain available in the pi package.
@@ -58,10 +58,30 @@ JEV_AI_MODEL=optional
 
 No rules file means no checks; the gate fails open.
 
+## Tool permission gate (optional)
+
+CodeBuddy Code and Claude Code can also review **Bash / Write / Edit / MultiEdit** before they run. It is **off by default**.
+
+Create `~/.pi/agent/jev-comp/auto-approve.json` (or the same file under `JEV_CONFIG_DIR`):
+
+```json
+{
+  "enabled": true,
+  "mode": "observe",
+  "tools": ["Bash", "Write", "Edit", "MultiEdit"]
+}
+```
+
+Start with `mode: "observe"`: decisions are written only to `audit.jsonl` (`kind: "permission"`). After reviewing them, change to `"auto"` to emit `allow` / `ask` / `deny`. Host `permissions.deny` and `permissions.ask` rules always win; any error falls back to the host.
+
+On Claude Code, `host-prompt` currently consults JEV for every locally undecided call, because the prompt heuristic is CodeBuddy-specific. See [details](docs/claude-code.md).
+
+Sample: [examples/auto-approve.sample.json](examples/auto-approve.sample.json).
+
 ## Use
 
 - Dispatch a normal subagent task; configured violations are blocked, or warned in `warn` mode.
-- CodeBuddy permission automation stays off until enabled in `auto-approve.json` under the config dir (`~/.pi/agent/jev-comp`, or `JEV_CONFIG_DIR`). With the default `jevWhen: "host-prompt"`, JEV is consulted only for calls the host would actually prompt for; everything else is left to the host.
+- The CodeBuddy Code / Claude Code permission gate additionally reviews Bash / Write / Edit / MultiEdit; see "Tool permission gate" above.
 - For pi-only tools and advanced modes, see the full reference.
 
 ## Documentation

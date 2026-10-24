@@ -1,6 +1,6 @@
 ---
 name: subagent-jev
-description: 为 CodeBuddy Code 之 subagent 配制 JEV 派单合规规则之用。当用户要为某个 subagent（worker/scout 等）新增或调整 JEV 合规规则、录入 JEV 模型/端点设置，或言「配置 subagent 规则」「subagent-jev」时加载。
+description: 为 CodeBuddy Code 配制 JEV 派单合规规则与工具权限门。当用户要新增或调整某 subagent 的合规规则、配置 Bash/Write/Edit/MultiEdit 自动审批、录入 JEV 模型/端点，或言「配置 subagent 规则」「配置权限门」「subagent-jev」时加载。
 ---
 
 # subagent-jev — JEV 合规规则配置向导（CodeBuddy Code）
@@ -51,7 +51,22 @@ description: 为 CodeBuddy Code 之 subagent 配制 JEV 派单合规规则之用
    （真派一单亦可验：block 命中即拒，reason 逐条列出违规；唯真派单徒耗子 agent 之实际动作，试测仍以脚本为便。）
 5. **写配置**：改前先读档，核对既有各组不被破坏；同义且同判之问引同一编号，勿另起一条；写毕告用户即时生效，无须重载。
 
-## 四、注意事项
+## 四、工具权限门（可选）
+
+本门另审 `Bash`/`Write`/`Edit`/`MultiEdit` 之 PreToolUse；**默认关闭**。唯用户明言要开时方代写，不得擅自启用。
+
+1. **先问范围与模式**：说明此门会代宿主输出 allow/ask/deny；建议先以 `observe` 观察，再切 `auto`。
+2. **写配置**：`<configDir>/auto-approve.json`（`JEV_CONFIG_DIR` 或 `~/.pi/agent/jev-comp`；样例 `examples/auto-approve.sample.json`）。最小起手：
+
+   ```json
+   {"enabled": true, "mode": "observe", "tools": ["Bash", "Write", "Edit", "MultiEdit"]}
+   ```
+
+3. **观察**：阅 `audit.jsonl` 中 `kind:"permission"` 行之 `decision`/`risk`/`approval`/`reason`，确认合意。
+4. **切 auto**：确认后改 `mode:"auto"`。`jevWhen` 缺省 `host-prompt`；如需凡本地无定论皆问模型，改 `always`。`destructiveAction` 缺省 ask，可改 deny。
+5. **安全**：宿主 `permissions.deny`/`ask` 命中即沉默；错误/超时亦沉默。`allow` 可越过宿主规则，故绝不得以本门绕开用户明示之 deny。改档即生效，无须重载。
+
+## 五、注意事项
 
 - **key 安全**：apiKey 之值绝不入任何档/日志/错误文本；env 档与 upstreams.json 皆须 600 权限；`JEV_AI_API_KEY` 由用户亲笔自填，agent 全程不经手其值（查配置唯查键名之有无，**绝不读值**）。
 - **fail-open**：端点不可达、key 缺失、规则档损坏，派单一律放行；非法问句条目、非字符串/悬空/重复编号、非法 mode 值皆静默忽略——**配置笔误不报错，唯表现为「不拦」**，改档后宜以测试任务一验。

@@ -55,7 +55,8 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
 治「每个写/执行类工具都要人确认一遍」之烦：于 `Bash`/`Write`/`Edit`/`MultiEdit` 之 PreToolUse 上
 先作本地确定性判定，无定论者再问 JEV 之 risk（四档打分）与 approval 两问，按 `mode` 输出
 `permissionDecision: allow | ask | deny`。逻辑层 `jev/permission.ts`（纯逻辑、可测），钩子面
-`cb/permission-main.ts`，入口 `bin/jev-hook perm`（超时 8s）。
+`cb/permission-main.ts`，入口 `bin/jev-hook perm`（超时 8s）。Claude Code 共用此门，差异见
+[claude-code.md](claude-code.md)。
 
 配置档 `<configDir>/auto-approve.json`（仓内 `examples/auto-approve.sample.json` 仅示 schema）：
 

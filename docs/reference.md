@@ -21,7 +21,7 @@ All hosts share the same JEV endpoint, rules file (`~/.pi/agent/jev-comp/complia
 ## Features
 
 - **Dispatch compliance gate** — before a subagent starts, the task text is sent to JEV System One. Any configured rule that fires can block the dispatch and return every violation to the main agent; the subagent is never spawned.
-- **CodeBuddy Code permission gate (opt-in)** — local deterministic checks plus JEV risk/approval questions can auto-approve, ask, or deny Bash / Write / Edit / MultiEdit. Off by default.
+- **Tool permission gate (opt-in, CodeBuddy Code & Claude Code)** — local deterministic checks plus JEV risk/approval questions can auto-approve, ask, or deny Bash / Write / Edit / MultiEdit. Off by default.
 - **Advisory warn mode** — violations can be delivered as a trailing notice instead of blocking, so the main agent keeps control.
 - **Bundled `subagent-jev` skill** — guides endpoint/model setup and per-subagent compliance rules on every host.
 - **`jev_ask` tool (pi only)** — evaluates typed questions (`noul` / `choice` / `score`) against a state text.
@@ -232,7 +232,7 @@ pi 侧包名仍为 `pi-subagent-jev`；CodeBuddy Code 与 Claude Code 插件名�
 ### 功能介绍
 
 - **派单合规拦截**——子 agent 启动前，任务文本送 JEV System One 求值；命中已配规则可拦截，并将违规原因逐条返予主 agent，子 agent 不被派生。
-- **CodeBuddy Code 工具权限门（opt-in）**——本地确定性判定＋ JEV risk/approval 两问，可自动放行、询问或拒绝 Bash / Write / Edit / MultiEdit；默认关闭。
+- **工具权限门（opt-in，CodeBuddy Code / Claude Code）**——本地确定性判定＋ JEV risk/approval 两问，可自动放行、询问或拒绝 Bash / Write / Edit / MultiEdit；默认关闭。
 - **warn 观察模式**——命中规则时不阻断，改以末位提示交付主 agent，由其自决。
 - **内置 `subagent-jev` skill**——引导配置端点、模型与各 subagent 之合规规则，三宿主通用。
 - **`jev_ask` 工具（唯 pi）**——对 state 文本求值一批类型化问题（`noul` / `choice` / `score`）。
