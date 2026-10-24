@@ -613,10 +613,15 @@ export function assessLocally(args: {
 }
 
 // ── 宿主弹窗预测 ──
-// 宿主（CodeBuddy Code 2.174.0）之 stage 3 命令安全检查：纯正则，比对命令原文，无模型调用。
-// 三组数组取自其 CommandUtils.checkSingleCommandSafety（bundle 内 eC / ev / ew 三处），逐字照录。
-// 宿主序为 SAFE 短路 → CRITICAL → HIGH，皆比之于 normalizeCommandPaths(stripHeredocBodies(cmd)).toLowerCase()。
-// 本层只作整条小写后比，不复刻切段与路径归一：所漏判者，本门返 silent 交宿主自行弹窗，绝不因此放行。
+// 宿主（CodeBuddy Code 2.174.0）之 stage 3 命令安全检查：纯正则，无模型调用。其链路（bundle@14588299）：
+//   normalizeCommandPaths(stripHeredocBodies(cmd)).toLowerCase() → stripRedirections → splitCommandRespectingQuotes
+//   → 多段者先作跨分隔符检测，再逐段取最高风险；单段者径测。
+// 三组问句数组取自其 CommandUtils.checkSingleCommandSafety（bundle@14587421 之 ew / eC / ev），逐字照录；
+// 段内之序亦照之：SAFE 短路 → CRITICAL → HIGH。切段照其 splitCommandRespectingQuotes（bundle@14582006）：
+// 未加引号之 ; & | 为分隔（连续者并作一），段皆 trim、空段弃之——**不按换行切**；重定向之剥除亦照其
+// stripRedirections（bundle@14581848），免 2>&1 之 & 被误作分隔。
+// 不复刻者唯路径归一（将「/usr/bin/sudo」化作「sudo」）与 heredoc 体剥除：所漏判者，本门返 silent 交宿主
+// 自行弹窗，绝不因此放行。另有一处刻意从严：段首 VAR=value 赋值先剥（宿主不剥），宁多问一次。
 // 缘由：permissions.defaultMode = "bypassPermissions" 之下，Bash 之弹窗唯此一源（stage 3 在 bypass 短路之前）；
 // 不中此正则者宿主必不弹窗，问模型徒增时延而无所得。
 // 此非判险，乃测宿主：判险仍循上法（切段分词、名单、路径），二者互不取代。
@@ -688,16 +693,88 @@ const HOST_HIGH: RegExp[] = [
   /\brm\s+(?:-[^\s]*\s+)*\S*[*?]/,
 ];
 
+/** 跨分隔符检测（bundle@14588299 之 checkCrossSeparatorDangerousPatterns）：唯此一条为 HIGH；
+ *  /(curl|wget)…\| sh/ 属 MEDIUM（isSafe:true），不弹，故不录。 */
+const HOST_CROSS_SEPARATOR: RegExp[] = [/\|\s*xargs\s+(rm|unlink)\b/];
+
+/** 照宿主 stripRedirections（bundle@14581848）剥除 fd 重定向，免 2>&1 之 & 被误作分隔。 */
+function hostStripRedirections(text: string): string {
+  return text
+    .replace(/\d*>>[&]?\d+/g, " ")
+    .replace(/\d*>[&]\d+/g, " ")
+    .replace(/\d+>>[^\s;|&]*/g, " ")
+    .replace(/\d+>[^\s;|&]*/g, " ");
+}
+
+/**
+ * 照宿主 splitCommandRespectingQuotes（bundle@14582006）切段：未加引号之 ; & | 为分隔，
+ * 连续者并作一；引号内不切，反斜杠转义原样留存；段皆 trim，空段弃之。线性扫描，无递归。
+ * **不按换行切**——宿主亦不切。
+ */
+function hostSegments(text: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === "\\" && !inSingle && i + 1 < text.length) {
+      cur += ch + text[++i];
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      cur += ch;
+      continue;
+    }
+    if (inSingle || inDouble) {
+      cur += ch;
+      continue;
+    }
+    if (ch === ";" || ch === "&" || ch === "|") {
+      while (i + 1 < text.length && /[;&|]/.test(text[i + 1]!)) i += 1;
+      const seg = cur.trim();
+      if (seg !== "") out.push(seg);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  const seg = cur.trim();
+  if (seg !== "") out.push(seg);
+  return out;
+}
+
+/** 剥段首之 VAR=value 赋值（可链式多个）。宿主不剥；本层从严，赋以引号之值不剥。 */
+function stripLeadingAssignments(segment: string): string {
+  const stripped = segment.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s'"]*\s+)+/, "");
+  return stripped.trim();
+}
+
 /**
  * 宿主是否会为这条命令弹窗（以 bypassPermissions 为前提）。
- * 宿主先 toLowerCase 再比，且 SAFE 短路先于 CRITICAL/HIGH；此处同序照办。
+ * 照宿主之序：小写 → 剥重定向 → 切段；多段者先作跨分隔符检测，再逐段 SAFE → CRITICAL → HIGH。
  * 任何异常（理论上不有）返 true——宁多问一次模型，不臆断宿主不弹。
  */
 export function hostWouldPrompt(command: string): boolean {
   try {
-    const text = command.toLowerCase();
-    if (HOST_SAFE_SHORTCIRCUIT.some((re) => re.test(text))) return false;
-    return HOST_CRITICAL.some((re) => re.test(text)) || HOST_HIGH.some((re) => re.test(text));
+    const text = hostStripRedirections(command.toLowerCase());
+    const segments = hostSegments(text);
+    if (segments.length > 1 && HOST_CROSS_SEPARATOR.some((re) => re.test(text))) return true;
+    for (const raw of segments) {
+      const segment = stripLeadingAssignments(raw);
+      if (segment === "") continue;
+      if (HOST_SAFE_SHORTCIRCUIT.some((re) => re.test(segment))) continue;
+      if (HOST_CRITICAL.some((re) => re.test(segment)) || HOST_HIGH.some((re) => re.test(segment))) {
+        return true;
+      }
+    }
+    return false;
   } catch {
     return true;
   }

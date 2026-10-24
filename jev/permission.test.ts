@@ -457,6 +457,19 @@ test("㉒ 宿主弹窗预测：高危正则命中即 true、SAFE 短路先于之
   // SAFE 短路先于 HIGH 之 /git restore/ 与 CRITICAL 之 /git clean -f/
   assert.equal(hostWouldPrompt("git restore --staged src/a.ts"), false);
   assert.equal(hostWouldPrompt("git clean -fn"), false);
+  // 切段与宿主同法：未加引号之 ; & | 为界，逐段判（故段首 ^\s*sudo 得中）
+  assert.equal(hostWouldPrompt("cd /tmp && sudo ls"), true);
+  assert.equal(hostWouldPrompt("cd /tmp && ls"), false);
+  assert.equal(hostWouldPrompt("npm test; git reset --hard"), true);
+  // 跨分隔符之 HIGH（宿主 checkCrossSeparatorDangerousPatterns 之一条）
+  assert.equal(hostWouldPrompt("find . -type f | xargs rm"), true);
+  // 引号内之 & 不作分隔；\n 亦不作分隔（宿主不按换行切）
+  assert.equal(hostWouldPrompt('sh -c "cd /tmp && sudo ls"'), false);
+  assert.equal(hostWouldPrompt("ls\nsudo reboot"), false);
+  // 段首赋值先剥（宿主不剥，此从严）：宁可多问一次
+  assert.equal(hostWouldPrompt("FOO=1 sudo ls"), true);
+  // 2>&1 之 & 属重定向，剥后不为界
+  assert.equal(hostWouldPrompt("npm test 2>&1 | tail -5"), false);
 });
 
 test("㉓ 审计行：reason 唯给值时落键，缺省不写（既有键序不变）", () => {

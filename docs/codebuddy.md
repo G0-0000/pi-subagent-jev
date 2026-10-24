@@ -103,13 +103,17 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
 
 - `host-prompt`（缺省）：唯 `Bash` 且命令命中宿主 stage 3 危险正则者方问；写类工具（Write/Edit/
   MultiEdit）本地无定论时径直沉默。`jev/permission.ts` 之 `hostWouldPrompt` 照录 CodeBuddy Code
-  2.174.0 `CommandUtils.checkCommandSafety` 之三组正则（SAFE 短路 → CRITICAL → HIGH），先小写再比。
+  2.174.0 `CommandUtils.checkCommandSafety` 之三组正则，并照其法小写、剥 fd 重定向、按未加引号之
+  `; & |` 切段（连续者并作一，**不按换行切**），逐段 SAFE 短路 → CRITICAL → HIGH，多段者另作跨分隔符
+  检测。
 - `always`：本地无定论者皆问（v0.14.0 之行为）。
 
 > **前提**：`host-prompt` 假定宿主跑 `permissions.defaultMode: "bypassPermissions"`——此时内建流程中
 > 唯一会对 Bash 弹窗者即 stage 3（纯正则，非模型）。若不在此模式，宿主自会按本分之规处置：本门沉默
-> 即交还宿主，绝无放行之虞。正则比对取整条命令之原文，故引号内之字面量（如 `rg -e "rm -rf" src/`）
-> 照样命中——此正是宿主持有之误报，宁可多问一次模型，不可断言其必不弹。
+> 即交还宿主，绝无放行之虞。正则比段内之原文，故引号内之字面量（如 `rg -e "rm -rf" src/`）照样
+> 命中——此正是宿主持有之误报，宁可多问一次模型，不可断言其必不弹。与宿主之异有二：不复刻其路径
+> 归一（`/usr/bin/sudo` 未化作 `sudo`，漏判则沉默，仍交宿主弹窗）；段首 `VAR=value` 赋值则先剥
+> （宿主不剥，此从严）。
 
 求值时每级上游 `timeoutMs` 压至 2000（三级最坏 6s < 钩子 8s），且无重试（红线②照旧）。
 
