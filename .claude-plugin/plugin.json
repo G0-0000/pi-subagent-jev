@@ -1,7 +1,7 @@
 {
   "name": "subagent-jev",
   "version": "0.14.1",
-  "description": "JEV System One compliance gate for Claude Code subagent dispatches",
+  "description": "JEV System One compliance gate for Claude Code subagent dispatches, with opt-in tool permission auto-approval",
   "author": "G0-0000",
   "license": "MIT",
   "homepage": "https://cnb.cool/G0-0000/subagents-jev",
