@@ -12,6 +12,7 @@ import {
   buildPermissionState,
   defaultWriteAudit,
   handlePermission,
+  hostSettingsFiles,
   parseAskRules,
   parseDenyRules,
   runPermissionHook,
@@ -60,7 +61,14 @@ function decisionOf(out: Record<string, unknown>): string | undefined {
 function run(
   input: Record<string, unknown>,
   dir: string,
-  opts: { askFn?: AskFn; audit?: string[]; readText?: (p: string) => string | null; home?: string } = {}
+  opts: {
+    askFn?: AskFn;
+    audit?: string[];
+    readText?: (p: string) => string | null;
+    home?: string;
+    host?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {}
 ): Promise<Record<string, unknown>> {
   const audit = opts.audit ?? [];
   return handlePermission(input, {
@@ -69,8 +77,9 @@ function run(
     askFn: opts.askFn,
     now: () => 1000,
     writeAudit: (_d, line) => audit.push(line),
-    host: "codebuddy",
+    host: opts.host ?? "codebuddy",
     readText: opts.readText ?? (() => null),
+    env: opts.env ?? {},
   });
 }
 
@@ -367,6 +376,115 @@ test("⑱ 宿主 permissions.ask 规则命中 → 沉默且不求值（不许代
     // 有 ask 规则：沉默，交宿主弹窗
     assert.deepEqual(await run(hookInput(), dir, { askFn, readText }), {});
     assert.equal(called, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("⑲ hostSettingsFiles：Claude Code 三档（尊重 CLAUDE_CONFIG_DIR），CodeBuddy 二档", () => {
+  const claudeProject = path.join(CWD, ".claude", "settings.json");
+  const claudeLocal = path.join(CWD, ".claude", "settings.local.json");
+  assert.deepEqual(hostSettingsFiles("claude-code", CWD, HOME, {}), [
+    path.join(HOME, ".claude", "settings.json"),
+    claudeProject,
+    claudeLocal,
+  ]);
+  assert.deepEqual(hostSettingsFiles("claude-code", CWD, HOME, { CLAUDE_CONFIG_DIR: "/tmp/cc" }), [
+    path.join("/tmp/cc", "settings.json"),
+    claudeProject,
+    claudeLocal,
+  ]);
+  // 空白值视为未设，回 ~/.claude
+  assert.equal(
+    hostSettingsFiles("claude-code", CWD, HOME, { CLAUDE_CONFIG_DIR: "   " })[0],
+    path.join(HOME, ".claude", "settings.json")
+  );
+  assert.deepEqual(hostSettingsFiles("codebuddy", CWD, HOME, {}), [
+    path.join(HOME, ".codebuddy", "settings.json"),
+    path.join(CWD, ".codebuddy", "settings.json"),
+  ]);
+});
+
+test("⑳ Claude Code：用户档与项目档之 deny 规则命中 → 沉默且不求值", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto" });
+  let called = 0;
+  const askFn: AskFn = async () => {
+    called += 1;
+    return answers({ "0": 1 }, 0);
+  };
+  const settings = JSON.stringify({ permissions: { deny: ["Bash(npm:*)"] } });
+  const userFile = path.join(HOME, ".claude", "settings.json");
+  const projectFile = path.join(CWD, ".claude", "settings.json");
+  try {
+    assert.deepEqual(
+      await run(hookInput(), dir, {
+        host: "claude-code",
+        askFn,
+        readText: (p) => (p === userFile ? settings : null),
+      }),
+      {}
+    );
+    assert.deepEqual(
+      await run(hookInput(), dir, {
+        host: "claude-code",
+        askFn,
+        readText: (p) => (p === projectFile ? settings : null),
+      }),
+      {}
+    );
+    assert.equal(called, 0, "宿主 deny 命中者不得求值");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("㉑ Claude Code：项目本地档 settings.local.json 之 ask 规则命中 → 沉默且不求值", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto" });
+  let called = 0;
+  const askFn: AskFn = async () => {
+    called += 1;
+    return answers({ "0": 1 }, 0);
+  };
+  const localFile = path.join(CWD, ".claude", "settings.local.json");
+  const settings = JSON.stringify({ permissions: { ask: ["Bash(npm:*)"] } });
+  try {
+    assert.deepEqual(
+      await run(hookInput(), dir, {
+        host: "claude-code",
+        askFn,
+        readText: (p) => (p === localFile ? settings : null),
+      }),
+      {}
+    );
+    assert.equal(called, 0, "宿主 ask 命中者不得代答");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("㉒ Claude Code + host-prompt：本地 pass 即问模型（CodeBuddy 正则会漏判）", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto" });
+  const audit: string[] = [];
+  let called = 0;
+  const askFn: AskFn = async () => {
+    called += 1;
+    return answers({ "0": 0.9, "1": 0.1 }, 0.1);
+  };
+  try {
+    // python3 script.py：CodeBuddy host-prompt 之下静默（见⑮），Claude 之下须求值
+    const out = await run(hookInput({ tool_input: { command: "python3 script.py" } }), dir, {
+      host: "claude-code",
+      audit,
+      askFn,
+    });
+    assert.equal(called, 1);
+    assert.equal(decisionOf(out), "allow");
+    const line = JSON.parse(audit[0]!) as Record<string, unknown>;
+    assert.equal(line.host, "claude-code");
+    assert.equal(line.decision, "allow");
+    assert.equal(line.risk, 0.1);
+    assert.equal(line.approval, 0.1);
+    assert.equal(line.reason, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -10,6 +10,8 @@
 //
 // jevWhen（缺省 host-prompt）之下，本地无定论者亦未必问模型：唯宿主真会弹窗者（Bash 命中 stage 3
 // 危险正则）方问，余者静默交宿主（审计记 decision:"silent"、reason:"host-would-allow"）。
+// 上述 stage 3 正则照录 CodeBuddy；Claude Code 之宿主规则另取 ~/.claude 与 <cwd>/.claude 诸档，
+// 其 host-prompt 之下保守地凡本地无定论者皆问（详见 shouldConsultJev）。
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -63,6 +65,8 @@ export type PermissionDeps = {
   host?: string;
   /** 家目录（缺省 os.homedir()；测试注入） */
   home?: string;
+  /** 环境变量（缺省 process.env；测试注入 CLAUDE_CONFIG_DIR 等） */
+  env?: NodeJS.ProcessEnv;
   /** 读宿主 settings 档（缺省读档，缺失返 null；测试注入） */
   readText?: (filePath: string) => string | null;
 };
@@ -119,17 +123,45 @@ export function parseAskRules(settings: unknown): string[] {
   return parseRuleList(settings, "ask");
 }
 
-/** 收集用户档与项目档之 permissions.<key> 规则（前者在前）；解析失败者静默略过。 */
-function collectRules(
+/**
+ * 宿主 settings 档之路径（序即优先级，前者先）：
+ * Claude Code 用户档取 $CLAUDE_CONFIG_DIR/settings.json（未设则 ~/.claude/settings.json），
+ * 其后项目档 <cwd>/.claude/settings.json 与项目本地档 <cwd>/.claude/settings.local.json；
+ * 余者（CodeBuddy）为用户档 ~/.codebuddy/settings.json 与项目档 <cwd>/.codebuddy/settings.json。
+ * 纯函数，不读档。
+ */
+export function hostSettingsFiles(
+  host: string,
   cwd: string,
   home: string,
-  readText: (filePath: string) => string | null,
-  key: "deny" | "ask"
+  env: NodeJS.ProcessEnv = process.env
 ): string[] {
-  const files = [
+  if (host === "claude-code") {
+    const raw = env.CLAUDE_CONFIG_DIR;
+    const configDir =
+      typeof raw === "string" && raw.trim() !== "" ? raw.trim() : path.join(home, ".claude");
+    return [
+      path.join(configDir, "settings.json"),
+      path.join(cwd, ".claude", "settings.json"),
+      path.join(cwd, ".claude", "settings.local.json"),
+    ];
+  }
+  return [
     path.join(home, ".codebuddy", "settings.json"),
     path.join(cwd, ".codebuddy", "settings.json"),
   ];
+}
+
+/** 收集宿主用户档与项目档之 permissions.<key> 规则（前者在前）；解析失败者静默略过。 */
+function collectRules(
+  host: string,
+  cwd: string,
+  home: string,
+  env: NodeJS.ProcessEnv,
+  readText: (filePath: string) => string | null,
+  key: "deny" | "ask"
+): string[] {
+  const files = hostSettingsFiles(host, cwd, home, env);
   const out: string[] = [];
   for (const f of files) {
     const raw = readText(f);
@@ -148,13 +180,19 @@ function collectRules(
  * jevWhen=always → 皆问（旧行为）；host-prompt → 唯 Bash 且命令命中宿主 stage 3 危险正则者。
  * host-prompt 之下写类工具不问——bypassPermissions 时宿主本不为 Write/Edit/MultiEdit 弹窗，
  * 无由代其决断。前提是宿主跑 bypassPermissions；非然者，宿主自会按本分之规处置。
+ *
+ * Claude Code 例外：hostWouldPrompt 之正则照录 CodeBuddy 之命令安全检查，于 Claude 不适用；
+ * 故其 host-prompt 之下凡本地无定论者皆问模型（保守之策——宿主之 ask 规则已于此前另行筛过，
+ * 多问一发不过增一分明审，绝不致误放）。
  */
 function shouldConsultJev(
   cfg: PermissionConfig,
   tool: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  host: string
 ): boolean {
   if (cfg.jevWhen === "always") return true;
+  if (host === "claude-code") return true;
   if (tool.toLowerCase() !== "bash") return false;
   return hostWouldPrompt(typeof input.command === "string" ? input.command : "");
 }
@@ -240,6 +278,8 @@ export async function handlePermission(
     const name = tool.toLowerCase();
     if (!cfg.tools.some((t) => t.toLowerCase() === name)) return passOutput();
 
+    const host = deps.host ?? detectHost();
+    const env = deps.env ?? process.env;
     const cwd =
       typeof hook.cwd === "string" && hook.cwd.trim() !== "" ? hook.cwd : process.cwd();
     const home = deps.home ?? os.homedir();
@@ -250,9 +290,9 @@ export async function handlePermission(
 
     // 宿主明言拒绝或明言须问者：一律沉默（allow 可越过宿主规则，不可越权；宿主自会处置）
     const readText = deps.readText ?? defaultReadText;
-    const denyRules = collectRules(cwd, home, readText, "deny");
+    const denyRules = collectRules(host, cwd, home, env, readText, "deny");
     if (denyRulesMatch(tool, toolInput, denyRules, { cwd, home })) return passOutput();
-    const askRules = collectRules(cwd, home, readText, "ask");
+    const askRules = collectRules(host, cwd, home, env, readText, "ask");
     if (denyRulesMatch(tool, toolInput, askRules, { cwd, home })) return passOutput();
 
     const started = (deps.now ?? Date.now)();
@@ -263,7 +303,7 @@ export async function handlePermission(
     let error: string | undefined;
     let reason: string | undefined;
 
-    if (local === "pass" && !shouldConsultJev(cfg, tool, toolInput)) {
+    if (local === "pass" && !shouldConsultJev(cfg, tool, toolInput, host)) {
       // 宿主本不弹窗（bypassPermissions 下唯 stage 3 之高危命令弹）：不问模型，静默交宿主
       decision = "silent";
       reason = "host-would-allow";
@@ -293,7 +333,7 @@ export async function handlePermission(
       approvalP,
       ms: (deps.now ?? Date.now)() - started,
       excerpt: excerptOf(tool, toolInput, 200),
-      host: deps.host ?? detectHost(),
+      host,
       ...(reason !== undefined ? { reason } : {}),
     });
     if (error !== undefined) {
