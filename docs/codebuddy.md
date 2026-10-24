@@ -67,6 +67,7 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
 | `risk.askScore` / `risk.denyScore` | 1.5 / 2.5 | risk 均值之阈值（档位 0..3） |
 | `approval.askP` | 0.75 | 「须人审」概率阈值 |
 | `destructiveAction` | ask | risk 达 denyScore 时之处置：ask 或 deny |
+| `jevWhen` | host-prompt | 本地无定论者何时问模型：host-prompt 唯宿主会弹窗者问；always 皆问（旧行为） |
 
 **宜先以 observe 跑一段**，看 `audit.jsonl` 中 `kind:"permission"` 行之 `decision` 合意，再改 `auto`。
 改档即生效（钩子每触发重读）。
@@ -97,15 +98,30 @@ codebuddy --plugin-dir /path/to/pi-subagent-jev
    或 approval 达 askP → ask；余者 allow。risk 与 approval **须俱为有限数**方出决断，任一缺失或
    求值失败 → 沉默（宿主照旧弹窗），绝不据半份证据与错误放行。
 
+**何时才问模型（`jevWhen`，v0.14.1）**：本地无定论者亦未必求值，须视宿主是否会弹窗——
+此门之本旨是替宿主弹窗作速裁，宿主本不弹者，问之无用。
+
+- `host-prompt`（缺省）：唯 `Bash` 且命令命中宿主 stage 3 危险正则者方问；写类工具（Write/Edit/
+  MultiEdit）本地无定论时径直沉默。`jev/permission.ts` 之 `hostWouldPrompt` 照录 CodeBuddy Code
+  2.174.0 `CommandUtils.checkCommandSafety` 之三组正则（SAFE 短路 → CRITICAL → HIGH），先小写再比。
+- `always`：本地无定论者皆问（v0.14.0 之行为）。
+
+> **前提**：`host-prompt` 假定宿主跑 `permissions.defaultMode: "bypassPermissions"`——此时内建流程中
+> 唯一会对 Bash 弹窗者即 stage 3（纯正则，非模型）。若不在此模式，宿主自会按本分之规处置：本门沉默
+> 即交还宿主，绝无放行之虞。正则比对取整条命令之原文，故引号内之字面量（如 `rg -e "rm -rf" src/`）
+> 照样命中——此正是宿主持有之误报，宁可多问一次模型，不可断言其必不弹。
+
 求值时每级上游 `timeoutMs` 压至 2000（三级最坏 6s < 钩子 8s），且无重试（红线②照旧）。
 
 审计：每次判定落一行于 `<configDir>/audit.jsonl`，键为
 `ts / host / kind:"permission" / tool / decision / risk / approval / latency_ms / excerpt`；
 `excerpt` 截 200 字，并遮蔽 `sk-*`、12 字以上之 bearer token 与 `Authorization` 头之值（不论
-长短）；求值失败之行列 `decision:"silent"` 并附 `error`。审计写入前尽力建目录（0700），写入失败
+长短）；求值失败之行列 `decision:"silent"` 并附 `error`；宿主不弹而未求值者亦列 `decision:"silent"`，
+另附 `reason:"host-would-allow"`（据此可核算省下之求值）。审计写入前尽力建目录（0700），写入失败
 静默吞（不影响工具调用）。
 
-**已知之限**：本地名单只识常见命令，未列者落模型（多耗一次求值，不失安全）；`user_requested` 与
+**已知之限**：本地名单只识常见命令，未列者是否落模型视 `jevWhen`——host-prompt 之下，宿主不弹者
+径静默（不失安全，然宿主若因他故弹窗，则仍由其自决）；`user_requested` 与
 `from_untrusted` 两问已备而**未接线**（须用户近期消息与不可信内容之上下文，本批尚无）。
 
 ## Skill

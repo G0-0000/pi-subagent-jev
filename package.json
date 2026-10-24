@@ -1,6 +1,6 @@
 {
   "name": "pi-subagent-jev",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "type": "module",
   "description": "JEV System One compliance gate for pi, CodeBuddy Code and Claude Code subagent dispatches",
   "keywords": [

@@ -12,6 +12,7 @@ import {
   buildPermissionState,
   defaultWriteAudit,
   handlePermission,
+  parseAskRules,
   parseDenyRules,
   runPermissionHook,
 } from "./permission-main.ts";
@@ -214,6 +215,10 @@ test("⑩ parseDenyRules：取 permissions.deny 之字符串项，畸形静默�
   assert.deepEqual(parseDenyRules({}), []);
   assert.deepEqual(parseDenyRules(null), []);
   assert.deepEqual(parseDenyRules([]), []);
+  // ask 规则同形解析，各取各键
+  assert.deepEqual(parseAskRules({ permissions: { ask: ["Bash(git push:*)", 1] } }), ["Bash(git push:*)"]);
+  assert.deepEqual(parseAskRules({ permissions: { deny: ["Bash(rm:*)"] } }), []);
+  assert.deepEqual(parseAskRules(null), []);
 });
 
 test("⑪ state 拼装：工具名、参照路径（有则）、参数原文、工作目录；参数超 2000 字截断", async () => {
@@ -286,4 +291,85 @@ test("⑭ defaultWriteAudit：配置目录缺时自建（0700），审计行追�
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("⑮ host-prompt：本地 pass 而宿主不弹 → 沉默、绝不求值（审计记 silent/host-would-allow）", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto" });
+  const audit: string[] = [];
+  // 若被调用即抛：审计行会带 error，可据以验「未求值」
+  const askFn: AskFn = async () => {
+    throw new Error("host-prompt 之下不应求值");
+  };
+  try {
+    // python3 script.py：本地无定论（不在只读名单），宿主 stage 3 不弹
+    assert.deepEqual(
+      await run(hookInput({ tool_input: { command: "python3 script.py" } }), dir, { audit, askFn }),
+      {}
+    );
+    const bashLine = JSON.parse(audit[0]!) as Record<string, unknown>;
+    assert.equal(bashLine.decision, "silent");
+    assert.equal(bashLine.reason, "host-would-allow");
+    assert.equal(bashLine.error, undefined, "不得代为求值");
+    // 写类工具本地无定论（无 file_path）亦然：bypassPermissions 下宿主不为 Write 弹窗
+    assert.deepEqual(await run(hookInput({ tool_name: "Write", tool_input: {} }), dir, { audit, askFn }), {});
+    const writeLine = JSON.parse(audit[1]!) as Record<string, unknown>;
+    assert.equal(writeLine.reason, "host-would-allow");
+    assert.equal(writeLine.error, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("⑯ host-prompt：本地 pass 且宿主会弹（rm -rf build）→ 照常求值", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto" });
+  let called = 0;
+  const askFn: AskFn = async () => {
+    called += 1;
+    return answers({ "0": 1 }, 0);
+  };
+  try {
+    const out = await run(hookInput({ tool_input: { command: "rm -rf build" } }), dir, { askFn });
+    assert.equal(called, 1);
+    assert.equal(decisionOf(out), "allow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("⑰ jevWhen=always：本地 pass 即问模型，纵宿主不弹", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto", jevWhen: "always" });
+  let called = 0;
+  const askFn: AskFn = async () => {
+    called += 1;
+    return answers({ "0": 1 }, 0);
+  };
+  try {
+    const out = await run(hookInput({ tool_input: { command: "python3 script.py" } }), dir, { askFn });
+    assert.equal(called, 1);
+    assert.equal(decisionOf(out), "allow");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("⑱ 宿主 permissions.ask 规则命中 → 沉默且不求值（不许代答）", async () => {
+  const dir = makeConfig({ enabled: true, mode: "auto" });
+  let called = 0;
+  const askFn: AskFn = async () => {
+    called += 1;
+    return answers({ "0": 1 }, 0);
+  };
+  const settings = JSON.stringify({ permissions: { ask: ["Bash(npm:*)"] } });
+  const readText = (p: string): string | null =>
+    p.endsWith(path.join(".codebuddy", "settings.json")) ? settings : null;
+  try {
+    // 基线：无 ask 规则时本地 allow
+    assert.equal(decisionOf(await run(hookInput(), dir, { askFn })), "allow");
+    // 有 ask 规则：沉默，交宿主弹窗
+    assert.deepEqual(await run(hookInput(), dir, { askFn, readText }), {});
+    assert.equal(called, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 

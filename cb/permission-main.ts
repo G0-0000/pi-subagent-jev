@@ -4,8 +4,12 @@
 //
 // 三条不可越之线：
 //   1. 宿主 deny 规则命中即沉默（返 {}）——钩子之 allow 可越过 permissions.deny，绝不能以 allow 覆盖用户显式拒绝。
+//      宿主 ask 规则命中亦然：用户已明言须问，本门不得代答。
 //   2. 任何错误/超时 → 沉默（返 {}），绝不因错误而放行。
 //   3. 钩子须在超时内归：链上每级 timeoutMs 压至 2000（最坏三级 6s < 钩子 8s），且绝无重试。
+//
+// jevWhen（缺省 host-prompt）之下，本地无定论者亦未必问模型：唯宿主真会弹窗者（Bash 命中 stage 3
+// 危险正则）方问，余者静默交宿主（审计记 decision:"silent"、reason:"host-would-allow"）。
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,12 +22,14 @@ import {
   buildPermissionAudit,
   decidePermission,
   denyRulesMatch,
+  hostWouldPrompt,
   loadPermissionConfig,
   meanScore,
   noulProbability,
   scoreProbabilities,
   type Decision,
   type LocalVerdict,
+  type PermissionConfig,
 } from "../jev/permission.ts";
 import {
   allowPre,
@@ -93,21 +99,32 @@ function makeAskFn(configDir: string): AskFn {
       : ask({ ...p, timeoutMs: PERMISSION_TIMEOUT_MS });
 }
 
-/** 自宿主 settings 取 permissions.deny（数组之字符串项）；任何畸形静默弃之。 */
-export function parseDenyRules(settings: unknown): string[] {
+/** 自宿主 settings 取 permissions.<key>（数组之字符串项）；任何畸形静默弃之。 */
+export function parseRuleList(settings: unknown, key: "deny" | "ask"): string[] {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) return [];
   const perms = (settings as Record<string, unknown>).permissions;
   if (!perms || typeof perms !== "object" || Array.isArray(perms)) return [];
-  const deny = (perms as Record<string, unknown>).deny;
-  if (!Array.isArray(deny)) return [];
-  return deny.filter((r): r is string => typeof r === "string" && r.trim() !== "");
+  const list = (perms as Record<string, unknown>)[key];
+  if (!Array.isArray(list)) return [];
+  return list.filter((r): r is string => typeof r === "string" && r.trim() !== "");
 }
 
-/** 收集用户档与项目档之 deny 规则（前者在前）；解析失败者静默略过。 */
-function collectDenyRules(
+/** permissions.deny 之规则。 */
+export function parseDenyRules(settings: unknown): string[] {
+  return parseRuleList(settings, "deny");
+}
+
+/** permissions.ask 之规则（宿主明确须问者，本门亦不得代答）。 */
+export function parseAskRules(settings: unknown): string[] {
+  return parseRuleList(settings, "ask");
+}
+
+/** 收集用户档与项目档之 permissions.<key> 规则（前者在前）；解析失败者静默略过。 */
+function collectRules(
   cwd: string,
   home: string,
-  readText: (filePath: string) => string | null
+  readText: (filePath: string) => string | null,
+  key: "deny" | "ask"
 ): string[] {
   const files = [
     path.join(home, ".codebuddy", "settings.json"),
@@ -118,12 +135,28 @@ function collectDenyRules(
     const raw = readText(f);
     if (raw === null) continue;
     try {
-      out.push(...parseDenyRules(JSON.parse(raw)));
+      out.push(...parseRuleList(JSON.parse(raw), key));
     } catch {
       /* 坏档：略过 */
     }
   }
   return out;
+}
+
+/**
+ * 本地无定论者是否须问模型：
+ * jevWhen=always → 皆问（旧行为）；host-prompt → 唯 Bash 且命令命中宿主 stage 3 危险正则者。
+ * host-prompt 之下写类工具不问——bypassPermissions 时宿主本不为 Write/Edit/MultiEdit 弹窗，
+ * 无由代其决断。前提是宿主跑 bypassPermissions；非然者，宿主自会按本分之规处置。
+ */
+function shouldConsultJev(
+  cfg: PermissionConfig,
+  tool: string,
+  input: Record<string, unknown>
+): boolean {
+  if (cfg.jevWhen === "always") return true;
+  if (tool.toLowerCase() !== "bash") return false;
+  return hostWouldPrompt(typeof input.command === "string" ? input.command : "");
 }
 
 /** 参数节录（供 state 与审计）：命令或文件路径直取，余者 JSON 化；空白归一、截断。 */
@@ -187,7 +220,8 @@ function emitDecision(decision: Decision, reason: string): Record<string, unknow
 
 /**
  * PreToolUse 权限门主流程。
- * 关档/不管辖之工具/命中宿主 deny 规则 → {}；observe 唯审计；auto 依判定出 allow/ask/deny。
+ * 关档/不管辖之工具/命中宿主 deny 或 ask 规则 → {}；observe 唯审计；auto 依判定出 allow/ask/deny。
+ * 本地无定论者按 jevWhen 决是否问模型：不问者静默（{}），审计记 silent/host-would-allow。
  * 任何异常 → {}（绝不因此放行）。
  */
 export async function handlePermission(
@@ -214,9 +248,12 @@ export async function handlePermission(
         ? (hook.tool_input as Record<string, unknown>)
         : {};
 
-    // 宿主明言拒绝者：一律沉默（allow 可越过 permissions.deny，不可越权）
-    const denyRules = collectDenyRules(cwd, home, deps.readText ?? defaultReadText);
+    // 宿主明言拒绝或明言须问者：一律沉默（allow 可越过宿主规则，不可越权；宿主自会处置）
+    const readText = deps.readText ?? defaultReadText;
+    const denyRules = collectRules(cwd, home, readText, "deny");
     if (denyRulesMatch(tool, toolInput, denyRules, { cwd, home })) return passOutput();
+    const askRules = collectRules(cwd, home, readText, "ask");
+    if (denyRulesMatch(tool, toolInput, askRules, { cwd, home })) return passOutput();
 
     const started = (deps.now ?? Date.now)();
     const local: LocalVerdict = assessLocally({ tool, input: toolInput, cwd, home });
@@ -224,8 +261,13 @@ export async function handlePermission(
     let riskMean = Number.NaN;
     let approvalP = Number.NaN;
     let error: string | undefined;
+    let reason: string | undefined;
 
-    if (local === "pass") {
+    if (local === "pass" && !shouldConsultJev(cfg, tool, toolInput)) {
+      // 宿主本不弹窗（bypassPermissions 下唯 stage 3 之高危命令弹）：不问模型，静默交宿主
+      decision = "silent";
+      reason = "host-would-allow";
+    } else if (local === "pass") {
       try {
         const res: SystemOneResult = await (deps.askFn ?? makeAskFn(configDir))({
           state: buildPermissionState({ tool, input: toolInput, cwd }),
@@ -252,6 +294,7 @@ export async function handlePermission(
       ms: (deps.now ?? Date.now)() - started,
       excerpt: excerptOf(tool, toolInput, 200),
       host: deps.host ?? detectHost(),
+      ...(reason !== undefined ? { reason } : {}),
     });
     if (error !== undefined) {
       try {

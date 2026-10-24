@@ -12,6 +12,7 @@ import {
   DEFAULT_PERMISSION_TOOLS,
   defaultPermissionConfig,
   denyRulesMatch,
+  hostWouldPrompt,
   loadPermissionConfig,
   meanScore,
   noulProbability,
@@ -188,6 +189,7 @@ test("⑨ 配置：缺档/坏档 → 全缺省；逐字段坏值回退；合法�
       risk: { askScore: "high", denyScore: 9 },
       approval: { askP: 1.4 },
       destructiveAction: "explode",
+      jevWhen: "sometimes",
     }),
     (p) => {
       const cfg = loadPermissionConfig(p);
@@ -197,6 +199,7 @@ test("⑨ 配置：缺档/坏档 → 全缺省；逐字段坏值回退；合法�
       assert.deepEqual(cfg.risk, { askScore: 1.5, denyScore: 2.5 });
       assert.equal(cfg.approval.askP, 0.75);
       assert.equal(cfg.destructiveAction, "ask");
+      assert.equal(cfg.jevWhen, "host-prompt");
     }
   );
   withConfigFile(
@@ -207,6 +210,7 @@ test("⑨ 配置：缺档/坏档 → 全缺省；逐字段坏值回退；合法�
       risk: { askScore: 1.2, denyScore: 2.2 },
       approval: { askP: 0.6 },
       destructiveAction: "deny",
+      jevWhen: "always",
     }),
     (p) => {
       const cfg = loadPermissionConfig(p);
@@ -216,6 +220,7 @@ test("⑨ 配置：缺档/坏档 → 全缺省；逐字段坏值回退；合法�
       assert.deepEqual(cfg.risk, { askScore: 1.2, denyScore: 2.2 });
       assert.equal(cfg.approval.askP, 0.6);
       assert.equal(cfg.destructiveAction, "deny");
+      assert.equal(cfg.jevWhen, "always");
     }
   );
   withConfigFile(JSON.stringify({ tools: [1, null] }), (p) => {
@@ -432,4 +437,56 @@ test("⑱ deny 规则匹配：前导空白/复合命令/赋值前缀皆中；畸
   // 形不可解析之规则：保守视为命中（本门沉默，宿主照旧弹窗）
   assert.equal(denyRulesMatch("Bash", { command: "ls" }, ["(((("], ctx), true);
 });
+
+test("㉒ 宿主弹窗预测：高危正则命中即 true、SAFE 短路先于之、寻常命令 false", () => {
+  // 宿主 stage 3（CodeBuddy Code 2.174.0）之 CRITICAL/HIGH
+  assert.equal(hostWouldPrompt("find . -delete"), true);
+  assert.equal(hostWouldPrompt("git reset --hard"), true);
+  assert.equal(hostWouldPrompt("sudo ls"), true);
+  assert.equal(hostWouldPrompt("rm -rf /tmp/x"), true);
+  assert.equal(hostWouldPrompt("git push --force origin main"), true);
+  // 寻常命令：宿主不弹，问模型徒耗一次求值
+  assert.equal(hostWouldPrompt("npm test"), false);
+  assert.equal(hostWouldPrompt("node -e 'x'"), false);
+  assert.equal(hostWouldPrompt(""), false);
+  // 宿主先 toLowerCase 再比，故大写亦中
+  assert.equal(hostWouldPrompt("SUDO ls"), true);
+  // 引号内之字面量照样命中（宿主之误报即此）；然本地确定性判定仍 allow——两层各司其职
+  assert.equal(hostWouldPrompt('rg -e "rm -rf" src/'), true);
+  assert.equal(bash('rg -e "rm -rf" src/'), "allow");
+  // SAFE 短路先于 HIGH 之 /git restore/ 与 CRITICAL 之 /git clean -f/
+  assert.equal(hostWouldPrompt("git restore --staged src/a.ts"), false);
+  assert.equal(hostWouldPrompt("git clean -fn"), false);
+});
+
+test("㉓ 审计行：reason 唯给值时落键，缺省不写（既有键序不变）", () => {
+  const withReason = JSON.parse(
+    buildPermissionAudit({
+      tool: "Bash",
+      decision: "silent",
+      riskMean: Number.NaN,
+      approvalP: Number.NaN,
+      ms: 1,
+      excerpt: "python3 script.py",
+      reason: "host-would-allow",
+    })
+  ) as Record<string, unknown>;
+  assert.equal(withReason.decision, "silent");
+  assert.equal(withReason.reason, "host-would-allow");
+  assert.deepEqual(Object.keys(withReason), [
+    "ts", "host", "kind", "tool", "decision", "risk", "approval", "latency_ms", "excerpt", "reason",
+  ]);
+  const noReason = JSON.parse(
+    buildPermissionAudit({
+      tool: "Bash",
+      decision: "silent",
+      riskMean: Number.NaN,
+      approvalP: Number.NaN,
+      ms: 0,
+      excerpt: "",
+    })
+  ) as Record<string, unknown>;
+  assert.equal("reason" in noReason, false);
+});
+
 

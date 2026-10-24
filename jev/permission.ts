@@ -1,4 +1,4 @@
-// 工具权限自动审批之门（纯逻辑层）：本地确定性判定、概率阈值判定、审计行、宿主 deny 规则匹配。
+// 工具权限自动审批之门（纯逻辑层）：本地确定性判定、宿主弹窗预测、概率阈值判定、审计行、宿主 deny 规则匹配。
 // 零网络、零子进程；唯 loadPermissionConfig 读一次配置档。钩子面见 cb/permission-main.ts。
 //
 // 立场（关键）：绝不以命令原文之子串匹配作判据——宿主旧判定的误报正源于此
@@ -14,6 +14,11 @@ import path from "node:path";
 
 export type PermissionMode = "observe" | "auto";
 export type DestructiveAction = "ask" | "deny";
+/**
+ * 何时问模型：host-prompt（缺省）＝唯宿主真会弹窗者方问；always＝本地无定论者皆问（旧行为）。
+ * host-prompt 之前提是宿主跑 bypassPermissions——彼时宿主不弹者，本门亦不须代其决断。
+ */
+export type JevWhen = "host-prompt" | "always";
 
 export type PermissionConfig = {
   enabled: boolean;
@@ -25,6 +30,8 @@ export type PermissionConfig = {
   approval: { askP: number };
   /** riskMean 达 denyScore 时之处置：ask（交人）或 deny（拒之） */
   destructiveAction: DestructiveAction;
+  /** 本地无定论时是否问模型：host-prompt（宿主不弹者不问）或 always（皆问） */
+  jevWhen: JevWhen;
 };
 
 /** 缺省工具集：宿主会为人审弹窗之写/执行类工具（唯 hooks.json matcher 所列者；WebFetch 不在其列）。 */
@@ -39,6 +46,7 @@ export function defaultPermissionConfig(): PermissionConfig {
     risk: { askScore: 1.5, denyScore: 2.5 },
     approval: { askP: 0.75 },
     destructiveAction: "ask",
+    jevWhen: "host-prompt",
   };
 }
 
@@ -104,6 +112,7 @@ export function loadPermissionConfig(
   if (o.destructiveAction === "ask" || o.destructiveAction === "deny") {
     cfg.destructiveAction = o.destructiveAction;
   }
+  if (o.jevWhen === "host-prompt" || o.jevWhen === "always") cfg.jevWhen = o.jevWhen;
   return cfg;
 }
 
@@ -603,6 +612,97 @@ export function assessLocally(args: {
   return "pass";
 }
 
+// ── 宿主弹窗预测 ──
+// 宿主（CodeBuddy Code 2.174.0）之 stage 3 命令安全检查：纯正则，比对命令原文，无模型调用。
+// 三组数组取自其 CommandUtils.checkSingleCommandSafety（bundle 内 eC / ev / ew 三处），逐字照录。
+// 宿主序为 SAFE 短路 → CRITICAL → HIGH，皆比之于 normalizeCommandPaths(stripHeredocBodies(cmd)).toLowerCase()。
+// 本层只作整条小写后比，不复刻切段与路径归一：所漏判者，本门返 silent 交宿主自行弹窗，绝不因此放行。
+// 缘由：permissions.defaultMode = "bypassPermissions" 之下，Bash 之弹窗唯此一源（stage 3 在 bypass 短路之前）；
+// 不中此正则者宿主必不弹窗，问模型徒增时延而无所得。
+// 此非判险，乃测宿主：判险仍循上法（切段分词、名单、路径），二者互不取代。
+
+const HOST_SAFE_SHORTCIRCUIT: RegExp[] = [
+  /git\s+restore\s+--staged\b/,
+  /git\s+clean\s+-[^\s]*n/,
+];
+
+const HOST_CRITICAL: RegExp[] = [
+  /rm\s+(-[rf]+|--recursive|--force).*\/(\s|$)/,
+  /rm\s+(-[rf]+|--recursive|--force).*(\/(etc|usr|var|sys|boot|lib)|~\/\*)/,
+  /\bdd\b.*of=\/(dev|sys|boot)/,
+  /\bmkfs\b/,
+  /\bfdisk\b/,
+  /\bparted\b/,
+  />\s*\/(etc|boot|sys)\//,
+  /crontab\s+-r/,
+  /\buserdel\b/,
+  /\bgroupdel\b/,
+  /DROP\s+DATABASE/i,
+  /\bTRUNCATE\s+TABLE\b/i,
+  /DELETE\s+FROM.*WHERE\s+(1=1|true)/i,
+  /FLUSHALL/i,
+  /FLUSHDB/i,
+  /terraform\s+destroy/,
+  /aws\s+\S+\s+delete\b/,
+  /az\s+\S+\s+delete\b/,
+  /gcloud\s+\S+\s+delete\b/,
+  /git\s+checkout\s+--\s+[.*]/,
+  /git\s+reset\s+--hard/,
+  /git\s+clean\s+-[fdxX]/,
+  /git\s+checkout\s+-[fF]/,
+  /git\s+stash\s+clear/,
+  /git\s+push(\s+[^\s]+)*\s+(-f|--force)(\s|$).*\b(main|master|develop|release|production)\b/,
+  /git\s+push(\s+[^\s]+)*\s+\b(main|master|develop|release|production)\b(\s+[^\s]+)*\s+(-f|--force)(\s|$)/,
+  /git\s+push(\s+[^\s]+)*\s+(--delete)(\s|$).*\b(main|master|develop|release|production)\b/,
+  /git\s+push\s+[^\s]+\s+:(main|master|develop|release|production)\b/,
+  /git\s+branch\s+-[dD]\s+(main|master|develop|release|production)\b/,
+  /git\s+merge\s+.*--force.*\b(main|master|develop|release|production)\b/,
+];
+
+const HOST_HIGH: RegExp[] = [
+  /^\s*sudo\b/,
+  /^\s*su\s/,
+  /\bchmod\s+777/,
+  /\brm\s+(-[^\s]*r|-[^\s]*R|--recursive)/,
+  /\bshred\b/,
+  /\bwipe\b/,
+  /\btruncate\b.*-s\s*0/,
+  /git\s+branch\s+-D/,
+  /git\s+push(\s+[^\s]+)*\s+(-f|--force)(\s|$)/,
+  /git\s+push(\s+[^\s]+)*\s+(--delete)(\s|$)/,
+  /git\s+push\s+[^\s]+\s+:/,
+  /git\s+filter-branch/,
+  /git\s+filter-repo/,
+  /git\s+worktree\s+(remove|prune)/,
+  /git\s+reflog\s+(delete|expire)/,
+  /git\s+checkout\s+--\s+\S/,
+  /git\s+restore\b/,
+  /git\s+stash\s+drop/,
+  /docker\s+system\s+prune/,
+  /docker\s+volume\s+rm/,
+  /kubectl\s+delete\b/,
+  /kubectl\s+drain\b/,
+  /find\s+.*-delete/,
+  /find\s+.*-exec\s+rm/,
+  /\|\s*xargs\s+(rm|unlink)/,
+  /\brm\s+(?:-[^\s]*\s+)*\S*[*?]/,
+];
+
+/**
+ * 宿主是否会为这条命令弹窗（以 bypassPermissions 为前提）。
+ * 宿主先 toLowerCase 再比，且 SAFE 短路先于 CRITICAL/HIGH；此处同序照办。
+ * 任何异常（理论上不有）返 true——宁多问一次模型，不臆断宿主不弹。
+ */
+export function hostWouldPrompt(command: string): boolean {
+  try {
+    const text = command.toLowerCase();
+    if (HOST_SAFE_SHORTCIRCUIT.some((re) => re.test(text))) return false;
+    return HOST_CRITICAL.some((re) => re.test(text)) || HOST_HIGH.some((re) => re.test(text));
+  } catch {
+    return true;
+  }
+}
+
 // ── 判定矩阵 ──
 
 /** allow/ask/deny：本门之决断；silent：无决断，宿主照旧弹窗（fail-open 之形）。 */
@@ -651,7 +751,10 @@ function maskSecrets(text: string): string {
     .trim();
 }
 
-/** 审计行（单行 JSON 字符串）：ts/host/kind/tool/decision/risk/approval/latency_ms/excerpt。 */
+/**
+ * 审计行（单行 JSON 字符串）：ts/host/kind/tool/decision/risk/approval/latency_ms/excerpt，
+ * 另有 reason（唯本地无定论而宿主不弹窗时记 "host-would-allow"，余者不写此键）。
+ */
 export function buildPermissionAudit(fields: {
   tool: string;
   decision: Decision;
@@ -659,6 +762,7 @@ export function buildPermissionAudit(fields: {
   approvalP: number;
   ms: number;
   excerpt: string;
+  reason?: string;
   ts?: string;
   host?: string;
 }): string {
@@ -672,6 +776,7 @@ export function buildPermissionAudit(fields: {
     approval: isFiniteNumber(fields.approvalP) ? Number(fields.approvalP.toFixed(3)) : null,
     latency_ms: Math.max(0, Math.round(fields.ms)),
     excerpt: maskSecrets(fields.excerpt).slice(0, 200),
+    ...(typeof fields.reason === "string" && fields.reason !== "" ? { reason: fields.reason } : {}),
   });
 }
 
