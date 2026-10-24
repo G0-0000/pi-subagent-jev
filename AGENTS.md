@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-pi package（名 **pi-subagent-jev**），扩展二枚：**`extensions/pi-subagent-jev.ts`**（`jev_ask` 工具 ＋ 派单拦截）与 **`extensions/orchestrator-main.ts`**（opt-in 主会话治理，见下节）：
+跨宿主包（**pi** / **CodeBuddy Code** / **Claude Code**；pi 侧包名 **pi-subagent-jev**，CodeBuddy Code 与 Claude Code 插件名 **subagent-jev**），pi 侧扩展二枚：**`extensions/pi-subagent-jev.ts`**（`jev_ask` 工具 ＋ 派单拦截）与 **`extensions/orchestrator-main.ts`**（opt-in 主会话治理，见下节）：
 - **派单拦截** — subagent 派单合规审查：钩 pi 的 `tool_call` 事件，对命中规则集之派单（`_all` 全局组在配则凡派单皆中，含无专属组之 agent）把任务原文打包为 state，向 JEV System One 一次性求值；命中规则后按处置模式（`mode`）分流——`block`（缺省）即返回 `{ block: true, reason }`，`warn`（v0.9.0）不阻断、以 `toolCallId` 暂存违规清单，另由 `tool_result` 钩追加于该次 subagent 工具结果之末。block reason 格式为：
   `派单审核未通过（agent=<名>）：` 首行，随后每条违规一行、以 `- ` 前缀（形如 `- Q001: 任务未给出具体文件路径`），末行固定 `请修正任务描述后重派。`；整个 reason 作为错误结果返给主 agent，subagent 不被派生。
 - **通用工具** — `jev_ask`（对 state 文本求值一批类型化问题：`noul` / `choice` / `score`）。
@@ -156,6 +156,7 @@ bearer 与 `Authorization` 头之值）。`user_requested`/`from_untrusted` 与 
 - 红线照旧：任何错误 fail-open（返 {}、exit 0）；stdout 至多一个 JSON。
 
 ## 部署
+- 公开主仓（CNB）：https://cnb.cool/G0-0000/subagents-jev
 - 本机安装命令：`pi install ~/pi-subagent-jev`（local source，直指项目目录）；实际注册于 `~/.pi/agent/settings.json` 之 `packages` 项（登记为相对路径 `"../../pi-subagent-jev"`，`pi list` 可见）
 - 改码后在 pi 内 `/reload` 生效
 - CodeBuddy 持久安装用 `scripts/install-codebuddy.sh`（plugin validate + add + enable，含 subagent-jev skill；快照入 `~/.codebuddy/plugins/cache`，改码后重跑），**缺省项目范围（project scope，仅对本仓库生效；`JEV_PLUGIN_SCOPE=user` 可改用户范围）**，本地启用态 `.codebuddy/` 已入 `.gitignore`；`--plugin-dir` 唯开发期用

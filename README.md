@@ -1,38 +1,74 @@
-# pi-subagent-jev
+# subagent-jev
 
-A [pi](https://github.com/earendil-works/pi-coding-agent) package that gates subagent dispatches through a JEV System One decision model, plus general-purpose tools to query that model.
+JEV System One compliance gate for subagent dispatches across **CodeBuddy Code**, **Claude Code**, and **pi**. It evaluates a delegated task before the subagent starts, can block configured policy violations, and fails open on every error.
 
-> **Supports pi + pi-subagents and CodeBuddy Code** — on pi the gate hooks the `subagent` tool provided by the pi-subagents package; on CodeBuddy Code it runs as a plugin hook (see [CodeBuddy Code](#codebuddy-code)).
+**Canonical repository:** <https://cnb.cool/G0-0000/subagents-jev>
+
+The package name on pi remains `pi-subagent-jev`; the CodeBuddy Code and Claude Code plugin id is `subagent-jev`.
+
+## Host support
+
+| Host | Integration | Install |
+|---|---|---|
+| **CodeBuddy Code** | Plugin hooks (`Task` / `Agent`) plus the `subagent-jev` skill | `/plugin install subagent-jev@codebuddy-plugins-official` once listed, or clone and run `bash scripts/install-codebuddy.sh` |
+| **Claude Code** | Plugin hooks plus the `subagent-jev` skill | Clone this repository, then `claude --plugin-dir /path/to/subagents-jev` |
+| **pi** | Package extension plus the `subagent` tool from `pi-subagents` | Clone this repository, then `pi install /path/to/subagents-jev` |
+
+All hosts share the same JEV endpoint, rules file (`~/.pi/agent/jev-comp/compliance-rules.json`), audit log, and fail-open behavior. Host-specific capabilities are called out below.
 
 ## Features
 
-- **Dispatch compliance gate** — when the main agent dispatches a subagent, the task text is sent to the JEV System One endpoint for evaluation. If any configured rule fires, the dispatch is blocked: every violation message is returned to the main agent as an error result, and the subagent is never spawned.
-- **`jev_ask` tool** — query the decision model directly. `jev_ask` evaluates a batch of typed questions (`noul` / `choice` / `score`) against a state text.
-- **Bundled `subagent-jev` skill** — walks you through recording endpoint/model settings and per-subagent compliance rules.
-- **Runtime monitoring (opt-in)** — watches running subagents for suspected bash stalls, unproductive tool loops, and repeated failures, and nudges the main agent with advisory alerts. Never interrupts; off by default.
+- **Dispatch compliance gate** — before a subagent starts, the task text is sent to JEV System One. Any configured rule that fires can block the dispatch and return every violation to the main agent; the subagent is never spawned.
+- **CodeBuddy Code permission gate (opt-in)** — local deterministic checks plus JEV risk/approval questions can auto-approve, ask, or deny Bash / Write / Edit / MultiEdit. Off by default.
+- **Advisory warn mode** — violations can be delivered as a trailing notice instead of blocking, so the main agent keeps control.
+- **Bundled `subagent-jev` skill** — guides endpoint/model setup and per-subagent compliance rules on every host.
+- **`jev_ask` tool (pi only)** — evaluates typed questions (`noul` / `choice` / `score`) against a state text.
+- **Runtime monitoring (pi only, opt-in)** — advisory detection of bash stalls, unproductive loops, and repeated failures; never interrupts.
 
 ## Requirements
 
-- pi coding agent **with the pi-subagents package** (the gate hooks its `subagent` tool)
-- A reachable JEV System One endpoint and an API key
+- A reachable JEV System One endpoint and API key.
+- **CodeBuddy Code** with plugin hook support.
+- **Claude Code** with plugin support.
+- **pi** with the `pi-subagents` package (the gate hooks its `subagent` tool).
 
 ## Install
 
-```
-pi install git:github.com/G0-0000/pi-subagent-jev
+### CodeBuddy Code
+
+```bash
+# Once the plugin is listed in the official marketplace:
+/plugin install subagent-jev@codebuddy-plugins-official
+
+# Or install directly from a clone of this repository:
+bash scripts/install-codebuddy.sh
 ```
 
-Then create the env file `~/.config/jev-comp/env` (permissions 600):
+### Claude Code
 
+```bash
+git clone https://cnb.cool/G0-0000/subagents-jev.git ~/subagents-jev
+claude --plugin-dir ~/subagents-jev
 ```
+
+### pi
+
+```bash
+git clone https://cnb.cool/G0-0000/subagents-jev.git ~/subagents-jev
+pi install ~/subagents-jev
+```
+
+### Shared configuration
+
+Create `~/.config/jev-comp/env` (permissions 600):
+
+```text
 JEV_AI_API_KEY=your-key
 JEV_AI_BASE_URL=https://your-jev-endpoint
 JEV_AI_MODEL=optional-model-override
 ```
 
-`JEV_AI_API_KEY` and `JEV_AI_BASE_URL` are required; `JEV_AI_MODEL` is optional (default `oc/jev-1.13-free`). Run `/reload` in pi (or restart) to pick it up.
-
-Rather not edit files by hand? Just ask pi to 配置 subagent 规则 — the bundled skill will guide you (see below).
+`JEV_AI_API_KEY` and `JEV_AI_BASE_URL` are required; `JEV_AI_MODEL` is optional (default `oc/jev-1.13-free`). Rules and the upstream chain are re-read by the CodeBuddy Code and Claude Code hooks on each invocation; pi requires `/reload` after changing its env or rules. To configure rules interactively, ask the host agent to 配置 subagent 规则.
 
 ## CodeBuddy Code
 
@@ -175,39 +211,75 @@ MIT
 
 ## 中文文档
 
-pi-subagent-jev 是一个 [pi](https://github.com/earendil-works/pi-coding-agent) 扩展包：以 JEV System One 决策模型为 subagent 派单设卡，并附查询该模型之通用工具。
+`subagent-jev` 是跨 **CodeBuddy Code**、**Claude Code** 与 **pi** 的 JEV System One 子 agent 派单合规门：派单前审核任务，命中规则可拦截，任何错误一律 fail-open。
 
-> **目前仅支持 pi + pi-subagents 使用**——派单拦截钩的是 pi-subagents 包提供的 `subagent` 工具。
+**主仓：** <https://cnb.cool/G0-0000/subagents-jev>
+
+pi 侧包名仍为 `pi-subagent-jev`；CodeBuddy Code 与 Claude Code 插件名为 `subagent-jev`。
+
+### 宿主支持
+
+| 宿主 | 接入方式 | 安装 |
+|---|---|---|
+| **CodeBuddy Code** | 插件钩子（`Task` / `Agent`）＋ `subagent-jev` skill | 上架后执行 `/plugin install subagent-jev@codebuddy-plugins-official`；或克隆后运行 `bash scripts/install-codebuddy.sh` |
+| **Claude Code** | 插件钩子 ＋ `subagent-jev` skill | 克隆本仓后执行 `claude --plugin-dir /path/to/subagents-jev` |
+| **pi** | 包扩展 ＋ `pi-subagents` 提供之 `subagent` 工具 | 克隆本仓后执行 `pi install /path/to/subagents-jev` |
+
+三宿主共用同一 JEV 端点、规则档（`~/.pi/agent/jev-comp/compliance-rules.json`）、审计日志与 fail-open 语义；能力差异于下文分述。
 
 ### 功能介绍
 
-- **派单合规拦截**——主 agent 派发 subagent 时，任务文本送 JEV System One 端点求值。命中任一已配规则即拦截：违规原因逐条列出，作为错误结果返给主 agent，subagent 不被派生。
-- **`jev_ask` 工具**——直查决策模型。`jev_ask` 对 state 文本求值一批类型化问题（`noul` / `choice` / `score`）。
-- **附赠 `subagent-jev` skill**——引导录入端点/模型设置与各 subagent 之合规规则。
-- **运行监控（opt-in）**——观察运行中 subagent 之疑似 bash 停滞、无效工具循环与无变化重复失败，命中则向主 agent 注提醒。绝不打断；默认关闭。
+- **派单合规拦截**——子 agent 启动前，任务文本送 JEV System One 求值；命中已配规则可拦截，并将违规原因逐条返予主 agent，子 agent 不被派生。
+- **CodeBuddy Code 工具权限门（opt-in）**——本地确定性判定＋ JEV risk/approval 两问，可自动放行、询问或拒绝 Bash / Write / Edit / MultiEdit；默认关闭。
+- **warn 观察模式**——命中规则时不阻断，改以末位提示交付主 agent，由其自决。
+- **内置 `subagent-jev` skill**——引导配置端点、模型与各 subagent 之合规规则，三宿主通用。
+- **`jev_ask` 工具（唯 pi）**——对 state 文本求值一批类型化问题（`noul` / `choice` / `score`）。
+- **运行监控（唯 pi，opt-in）**——观察 bash 停滞、无效工具循环与无变化重复失败，仅作提醒，绝不打断。
 
 ### 环境要求
 
-- pi coding agent，**并装有 pi-subagents 包**（拦截钩其 `subagent` 工具）
-- 可达之 JEV System One 端点与 API key
+- 可达之 JEV System One 端点与 API key。
+- **CodeBuddy Code**：支持插件钩子。
+- **Claude Code**：支持插件。
+- **pi**：装有 `pi-subagents` 包（拦截钩其 `subagent` 工具）。
 
 ### 安装
 
-```
-pi install git:github.com/G0-0000/pi-subagent-jev
+#### CodeBuddy Code
+
+```bash
+# 官方市场上架后：
+/plugin install subagent-jev@codebuddy-plugins-official
+
+# 或自本仓克隆后直接安装：
+bash scripts/install-codebuddy.sh
 ```
 
-继而创建 env 档 `~/.config/jev-comp/env`（权限 600）：
+#### Claude Code
 
+```bash
+git clone https://cnb.cool/G0-0000/subagents-jev.git ~/subagents-jev
+claude --plugin-dir ~/subagents-jev
 ```
+
+#### pi
+
+```bash
+git clone https://cnb.cool/G0-0000/subagents-jev.git ~/subagents-jev
+pi install ~/subagents-jev
+```
+
+#### 共用配置
+
+创建 env 档 `~/.config/jev-comp/env`（权限 600）：
+
+```text
 JEV_AI_API_KEY=your-key
 JEV_AI_BASE_URL=https://your-jev-endpoint
-JEV_AI_MODEL=可选之模型覆盖
+JEV_AI_MODEL=optional-model-override
 ```
 
-`JEV_AI_API_KEY` 与 `JEV_AI_BASE_URL` 为必配；`JEV_AI_MODEL` 可选（默认 `oc/jev-1.13-free`）。于 pi 内 `/reload`（或重启）生效。
-
-不欲手工编辑？对 pi 言「配置 subagent 规则」即可——包内 skill 自会引导（见下）。
+`JEV_AI_API_KEY` 与 `JEV_AI_BASE_URL` 为必配；`JEV_AI_MODEL` 可选（默认 `oc/jev-1.13-free`）。CodeBuddy Code 与 Claude Code 钩子每次调用重读规则与上游链；pi 改 env 或规则后须 `/reload`。欲交互配置规则，对宿主 agent 言「配置 subagent 规则」即可。
 
 ### 使用
 

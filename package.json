@@ -2,10 +2,12 @@
   "name": "pi-subagent-jev",
   "version": "0.14.0",
   "type": "module",
-  "description": "JEV System One compliance gate for pi subagent dispatches",
+  "description": "JEV System One compliance gate for pi, CodeBuddy Code and Claude Code subagent dispatches",
   "keywords": [
     "pi-package",
     "pi-extension",
+    "codebuddy-plugin",
+    "claude-code-plugin",
     "jev",
     "compliance",
     "subagent"
@@ -14,10 +16,10 @@
   "author": "G0-0000",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/G0-0000/pi-subagent-jev.git"
+    "url": "git+https://cnb.cool/G0-0000/subagents-jev.git"
   },
-  "homepage": "https://github.com/G0-0000/pi-subagent-jev#readme",
-  "bugs": "https://github.com/G0-0000/pi-subagent-jev/issues",
+  "homepage": "https://cnb.cool/G0-0000/subagents-jev#readme",
+  "bugs": "https://cnb.cool/G0-0000/subagents-jev/-/issues",
   "scripts": {
     "test": "node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts",
     "prune-training": "node scripts/prune-training.ts",

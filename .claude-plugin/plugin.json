@@ -4,5 +4,7 @@
   "description": "JEV System One compliance gate for Claude Code subagent dispatches",
   "author": "G0-0000",
   "license": "MIT",
+  "homepage": "https://cnb.cool/G0-0000/subagents-jev",
+  "repository": "https://cnb.cool/G0-0000/subagents-jev",
   "skills": ["./skills/claude"]
 }
