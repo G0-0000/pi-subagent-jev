@@ -102,7 +102,8 @@ pi-subagent-jev/
 再问 JEV 之 risk（四档打分）与 approval 两问。**默认关闭**——唯 `<configDir>/auto-approve.json`
 存在且 `enabled:true` 方启用（缺档/坏档即关，fail-open）。配置键：`mode`（observe|auto，缺省 observe）、
 `tools`（缺省 Bash/Write/Edit/MultiEdit，唯钩子 matcher 所列者）、`risk.askScore|denyScore`
-（1.5/2.5，0..3）、`approval.askP`（0.75）、`destructiveAction`（ask|deny，缺省 ask）；坏值逐字段回缺省。
+（1.5/2.5，0..3）、`approval.askP`（0.75）、`destructiveAction`（ask|deny，缺省 ask）、
+`jevWhen`（host-prompt|always，缺省 host-prompt）；坏值逐字段回缺省。
 
 三层判定，序不可易：**① 宿主 `permissions.deny` 命中即沉默**（`~/.codebuddy/settings.json` 与
 `<cwd>/.codebuddy/settings.json`；钩子之 allow 先于宿主权限规则、可越过 deny，故不可越权；Bash 规则
@@ -114,7 +115,11 @@ pi-subagent-jev/
 sort 之 `--compress-program`、fd 之 `-x/-X` 皆不认只读，`bash|sh|zsh -c` 之脚本递归再判〔深限 2 层，
 越限或不可解析者 pass，绝不 allow〕，`~user`/`~+`/`~-` 之不可静态展开者一律 ask）；
 **③ 模型兜底**（`jev/guard-questions.ts` 之 risk/approval，问句逐字取自 jev-guard，MIT），risk 均值
-达 denyScore → `destructiveAction`、达 askScore 或 approval 达 askP → ask，余者 allow。`mode: observe`
+达 denyScore → `destructiveAction`、达 askScore 或 approval 达 askP → ask，余者 allow。
+唯于 `jevWhen:"host-prompt"`（缺省）时，模型唯问「宿主本会弹窗」者：以 `hostWouldPrompt()` 照录
+CodeBuddy 2.174.0 之命令安全检查正则（CRITICAL／HIGH 二组，SAFE 短路二条在前；先小写归一、剥重定向、按 `; & |` 切段，引号内不切、不按换行切，逐段取最危者）
+判之；Bash 不命中者、及 Write/Edit/MultiEdit 之 pass 者，一概沉默并记 `reason:"host-would-allow"`，
+零求值、零迟滞（宿主 `bypassPermissions` 下本自放行）。`always` 则凡 pass 皆问，复原旧法。`mode: observe`
 只落审计；`auto` 始出 allow/ask/deny。risk 与 approval 须俱为有限数方出决断，任一缺失、求值失败、
 任何异常 → 沉默（`{}`，宿主照旧弹窗），绝不据半份证据与错误放行。
 求值每级上游 `timeoutMs` 压至 2000（三级 6s < 8s）、无重试；审计落 `<configDir>/audit.jsonl`
@@ -129,7 +134,7 @@ bearer 与 `Authorization` 头之值）。`user_requested`/`from_untrusted` 与 
 3. **任何错误 fail-open** — JEV 出错、配置档出错、概率缺失或 noul 字段缺失/非有限数皆放行（后者曾为漏洞，已修复：该规则标 `unknown` 不拦），绝不阻断派发、绝不外抛。`checkDispatch` 捕获一切异常返 `verdict:"error"` 行且 violations 为空
 
 ## 测试铁律
-- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 245 条）**全绿方可提交**
+- `npm test`（即 `node --test --test-reporter=dot jev/*.test.ts cb/*.test.ts`，当前 255 条）**全绿方可提交**
 - 测试不发真实 JEV 端点请求：`client.test.ts` 起本地 127.0.0.1 随机端口 mock HTTP server、真发 curl；`failover.test.ts` 纯逻辑＋注入时钟；`compliance.test.ts` 注入 `askFn`；`monitor*.test.ts` 注入概率＋假时钟。`scripts/calibrate.ts` 是唯一发真实请求的脚本，不进测试
 
 ## 配置与运行时
@@ -146,14 +151,14 @@ bearer 与 `Authorization` 头之值）。`user_requested`/`from_untrusted` 与 
 - 二者皆**运行时数据，不入库**（仓库存样例与代码，不存实际配置与审计留痕）
 - **多上游 failover（可选）**：生效档 `~/.pi/agent/jev-comp/upstreams.json`（仓库内 `examples/upstreams.sample.json` 为样例；代码只读绝不写，运行时数据不入库）。档不存在或任何解析/校验错误 → 返 null，走旧单端点链路（fail-open）。扩展加载时读一次（`jev/compliance.ts` 模块级懒缓存，`/reload` 重导入即重置）。顶层 `timeoutMs`（缺省 5000，curl `--max-time` 按秒取整）与 `cooldownMs`（缺省 30000）须为正整数；`upstreams` 须非空数组，每项 `{name, baseUrl, apiKey, model, proxy?}`：name 非空且唯一、baseUrl/apiKey/model 非空、baseUrl 末尾斜杠剥除、proxy 可选（缺省走既有 `JEV_AI_PROXY` 链）。`ask()` 按序尝试：首级用显式 `model` 参数（若传）否则各 upstream 自身 model；显式传 `baseUrl`/`apiKey`（如校准脚本）绕开链路。切换分类与冷却语义见 `jev/failover.ts` 档头注释（链上只一 upstream 时，其入冷却即全链冷却、每次皆保底真发，故冷却仅余 audit 意义）；决策记录见 `docs/adr/0001-upstream-failover.md`
 
-## CodeBuddy 适配（v0.13.0）
+## CodeBuddy 适配（v0.14.1）
 
-- 形态：插件根即仓库根；清单 .codebuddy-plugin/plugin.json，钩子 hooks/hooks.json，入口 bin/jev-hook（argv[2] = pre | post），适配逻辑 cb/。
+- 形态：插件根即仓库根；清单 .codebuddy-plugin/plugin.json，钩子 hooks/hooks.json，入口 bin/jev-hook（argv[2] = pre | post | perm），适配逻辑 cb/。
 - 双宿主共用：hooks/hooks.json 与 bin/jev-hook 由 CodeBuddy Code 与 Claude Code 共用，钩子命令取 `${CLAUDE_PLUGIN_ROOT}/bin/jev-hook`（CodeBuddy ≥2.172.1 与 Claude Code 皆替换或注入该变量），Claude 侧清单另为 .claude-plugin/plugin.json；真实 Claude Code CLI 端到端验证尚待补。
 - 安装：codebuddy --plugin-dir ~/pi-subagent-jev；开发期可用 /reload-plugins 重载。
 - Skill 分宿主：`skills/pi`、`skills/codebuddy`、`skills/claude` 各藏一份 `subagent-jev/SKILL.md`，三宿主各扫其径（清单分别指 `./skills/pi`、`./skills/codebuddy`、`./skills/claude`），互不相泄；CodeBuddy/Claude 版以 `scripts/try-rules.ts` 探针试规则，pi 版另带 `references/calibration.md`。
 - 配置：与 pi 侧同源，缺省 ~/.pi/agent/jev-comp（JEV_CONFIG_DIR 可覆写）；钩子为独立进程、每次触发重读，改档无须 /reload。
-- 语义：block 命中输出 hookSpecificOutput.permissionDecision="deny" 与同文 reason；warn 命中以 tool_use_id（缺则 call_id）落盘，PostToolUse 取回并附 additionalContext；审计行另有 host:"codebuddy"。
+- 语义：block 命中输出 hookSpecificOutput.permissionDecision="deny" 与同文 reason；warn 命中以 tool_use_id（缺则 call_id）落盘，PostToolUse 取回并附 additionalContext；审计行另有 host:"codebuddy"。权限门（`perm`）另出 allow/ask，详见上节。
 - 限制：唯 selfhost 传输；无思考深度调整、无运行监控、无 jev_ask（后续经 MCP 补）；JEV_CONFIG_DIR 不覆写 env 档与 training.jsonl。
 - 红线照旧：任何错误 fail-open（返 {}、exit 0）；stdout 至多一个 JSON。
 

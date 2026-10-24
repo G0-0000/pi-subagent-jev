@@ -61,7 +61,7 @@ No rules file means no checks; the gate fails open.
 ## Use
 
 - Dispatch a normal subagent task; configured violations are blocked, or warned in `warn` mode.
-- CodeBuddy permission automation stays off until enabled in `~/.pi/agent/jev-comp/auto-approve.json`.
+- CodeBuddy permission automation stays off until enabled in `auto-approve.json` under the config dir (`~/.pi/agent/jev-comp`, or `JEV_CONFIG_DIR`). With the default `jevWhen: "host-prompt"`, JEV is consulted only for calls the host would actually prompt for; everything else is left to the host.
 - For pi-only tools and advanced modes, see the full reference.
 
 ## Documentation
